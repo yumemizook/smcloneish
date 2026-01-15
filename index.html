@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSM Rhythm Game</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="bg-layer"></div>
+
+    <div id="ui-layer">
+        
+        <!-- Setup / Song Select -->
+        <div id="setup-panel">
+            <div class="song-select-interface">
+                <div class="ss-left-panel">
+                    <div class="ss-library-header">
+                        <h2>Song Library</h2>
+                        <span id="library-count">0 Songs</span>
+                    </div>
+                    <div id="song-list-container"></div>
+                    <div class="ss-left-footer">
+                        <label for="file-input" class="ss-btn ss-upload-btn"><span>📂 Import Folder</span></label>
+                        <button class="ss-btn ss-settings-btn" onclick="openSettings()">⚙️</button>
+                        <input type="file" id="file-input" webkitdirectory directory multiple style="display:none;">
+                    </div>
+                </div>
+
+                <div class="ss-right-panel">
+                    <div id="ss-empty-state"><p>Select or Import a Song to Begin</p></div>
+                    <div id="ss-details-content" style="display:none;">
+                        <div class="ss-banner-box">
+                            <img id="ss-banner" src="" alt="" style="display:none;">
+                            <div class="ss-banner-overlay"></div>
+                            <div class="ss-song-text">
+                                <h1 id="ss-title">Title</h1>
+                                <h2 id="ss-artist">Artist</h2>
+                            </div>
+                            <img id="ss-cdtitle" src="" alt="" style="display:none;">
+                        </div>
+
+                        <div class="ss-content-row">
+                            <div class="ss-diff-section">
+                                <h3>Select Difficulty</h3>
+                                <div id="ss-diff-list"></div>
+                            </div>
+                            <div class="ss-info-section">
+                                <div class="ss-calc-box">
+                                    <h3>Difficulty Breakdown</h3>
+                                    <div class="calc-row highlight"><span>Overall</span> <span id="calc-overall">0.0</span></div>
+                                    <div class="calc-row"><span>Stream</span> <span id="calc-stream">0.0</span></div>
+                                    <div class="calc-row"><span>Jumpstream</span> <span id="calc-jumpstream">0.0</span></div>
+                                    <div class="calc-row"><span>Handstream</span> <span id="calc-handstream">0.0</span></div>
+                                    <div class="calc-row"><span>Chordjack</span> <span id="calc-chordjack">0.0</span></div>
+                                    <div class="calc-row"><span>Technical</span> <span id="calc-technical">0.0</span></div>
+                                    <div class="calc-row"><span>Stamina</span> <span id="calc-stamina">0.0</span></div>
+                                    <div class="calc-row" style="border-top:1px solid #444; padding-top:5px; margin-top:5px;"><span>NPS</span> <span id="calc-nps">0.0</span></div>
+                                    <div class="calc-row"><span>Peak NPS</span> <span id="calc-peak">0.0</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        <button id="start-btn" class="ss-start-btn" onclick="startGameFromMenu()" disabled>START GAME</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="loading-status" style="display:none;">
+                <div class="spinner"></div><span id="loading-text">Processing...</span>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" style="display:none;">
+            <h2>Settings</h2>
+            <div class="setting-row">
+                <label>Scroll Direction:</label>
+                <button id="scroll-toggle" onclick="toggleScrollDir()">Upscroll (Default)</button>
+            </div>
+            <div class="setting-row">
+                <label>Scroll Time (ms):</label>
+                <input type="number" id="scroll-speed-input" value="650" min="100" max="2000" step="10">
+            </div>
+            <p class="subtext" style="margin-top:-20px; margin-bottom: 20px;">Time from appearance to hit (Lower is faster)</p>
+            <div class="setting-row keybinds">
+                <label>Keybinds:</label>
+                <div class="key-inputs">
+                    <input type="text" id="key-0" maxlength="1" value="d">
+                    <input type="text" id="key-1" maxlength="1" value="f">
+                    <input type="text" id="key-2" maxlength="1" value="j">
+                    <input type="text" id="key-3" maxlength="1" value="k">
+                </div>
+            </div>
+            <button class="close-btn" onclick="saveSettings()">Save & Close</button>
+        </div>
+
+        <!-- Gameplay HUD -->
+        <div id="game-hud" style="display:none;">
+            <div id="judgment-tracker">
+                <div class="tracker-item judge-marvelous">MARV: <span id="count-marvelous">0</span></div>
+                <div class="tracker-item judge-perfect">PERF: <span id="count-perfect">0</span></div>
+                <div class="tracker-item judge-great">GRT: <span id="count-great">0</span></div>
+                <div class="tracker-item judge-good">GOOD: <span id="count-good">0</span></div>
+                <div class="tracker-item judge-bad">BAD: <span id="count-bad">0</span></div>
+                <div class="tracker-item judge-miss">MISS: <span id="count-miss">0</span></div>
+            </div>
+            <div id="life-panel">LIFE: <span id="life-percent">50.0%</span></div>
+            <div class="hud-top">
+                <div class="score-box"><div class="label">SCORE</div><div id="score">0</div></div>
+                <div class="acc-box"><div class="label">ACCURACY</div><div id="accuracy">0.0000%</div></div>
+            </div>
+            <div id="center-display"><div id="combo">0</div><div id="judgment"></div></div>
+            <div id="failed-overlay" style="display:none;">FAILED</div>
+        </div>
+
+        <!-- Pause Menu -->
+        <div id="pause-menu" style="display:none;">
+            <h2>PAUSED</h2>
+            <button onclick="resumeGame()">Resume</button>
+            <button onclick="quitGame()">Quit</button>
+        </div>
+
+        <!-- Results Screen -->
+        <div id="results-screen" style="display:none;">
+            <div class="res-header">
+                <img id="res-banner" src="" alt="" style="display:none;">
+                <div class="res-song-info">
+                    <h2 id="res-song-title">Song Title</h2>
+                    <h3 id="res-song-artist">Artist</h3>
+                </div>
+            </div>
+
+            <div class="res-main-layout">
+                <div class="res-left-panel">
+                    <div class="res-grade-container">
+                        <span id="res-grade">AAA</span>
+                        <span id="res-clear-type"></span>
+                    </div>
+                    <div id="res-acc-box">
+                        <span id="res-acc">0.00%</span>
+                        <span id="res-ssr-display">SSR: 0.00</span>
+                    </div>
+                    
+                    <div class="res-data-grid">
+                        <div class="res-judgments-col">
+                            <div class="res-judge-row judge-marvelous"><span>MARVELOUS</span> <div class="val-grp"><span id="res-count-marvelous">0</span> <span id="res-pct-marvelous" class="sub-pct"></span></div></div>
+                            <div class="res-judge-row judge-perfect"><span>PERFECT</span> <div class="val-grp"><span id="res-count-perfect">0</span> <span id="res-pct-perfect" class="sub-pct"></span></div></div>
+                            <div class="res-judge-row judge-great"><span>GREAT</span> <div class="val-grp"><span id="res-count-great">0</span> <span id="res-pct-great" class="sub-pct"></span></div></div>
+                            <div class="res-judge-row judge-good"><span>GOOD</span> <div class="val-grp"><span id="res-count-good">0</span> <span id="res-pct-good" class="sub-pct"></span></div></div>
+                            <div class="res-judge-row judge-bad"><span>BAD</span> <div class="val-grp"><span id="res-count-bad">0</span> <span id="res-pct-bad" class="sub-pct"></span></div></div>
+                            <div class="res-judge-row judge-miss"><span>MISS</span> <div class="val-grp"><span id="res-count-miss">0</span> <span id="res-pct-miss" class="sub-pct"></span></div></div>
+                        </div>
+                        <div class="res-score-col">
+                            <div class="res-stat-item"><span>SCORE</span> <span id="res-score">0</span></div>
+                            <div class="res-stat-item"><span>DP</span> <span id="res-dp">0.00</span></div>
+                            <!-- FIXED: Added SSR ID -->
+                            <div class="res-stat-item"><span>SSR</span> <span id="res-ssr">0.00</span></div>
+                            <div class="res-stat-item"><span>MAX COMBO</span> <span id="res-combo">0</span> <span id="res-combo-pct" class="sub-pct-inline"></span></div>
+                        </div>
+                    </div>
+
+                    <div class="res-detailed-stats">
+                        <div class="res-detail-row"><span>Mean</span> <span id="res-mean">0.00ms</span></div>
+                        <div class="res-detail-row"><span>Std Dev</span> <span id="res-sd">0.00ms</span></div>
+                        <div class="res-detail-row"><span>Max Offset</span> <span id="res-max">0.00ms</span></div>
+                        <div class="res-detail-row"><span>MA Ratio</span> <span id="res-ma">-</span></div>
+                        <div class="res-detail-row"><span>PA Ratio</span> <span id="res-pa">-</span></div>
+                    </div>
+                </div>
+
+                <div class="res-right-panel">
+                    <div class="leaderboard-container">
+                        <h3>Accuracy Graph</h3>
+                        <canvas id="accuracyChart" width="450" height="150"></canvas>
+                        <div id="leaderboard-list" style="display:none;"></div>
+                    </div>
+                    <div class="charts-container">
+                        <h4>Hit Distribution</h4>
+                        <canvas id="offsetChart" width="450" height="100"></canvas>
+                        <h4>Life & Combo</h4>
+                        <canvas id="lifeComboChart" width="450" height="100"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="quitGame()" class="res-back-btn">Back to Select</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+    <script src="game.js"></script>
+</body>
+</html>
