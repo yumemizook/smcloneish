@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebSM Rhythm Game</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -23,12 +24,16 @@
                     <div class="ss-library-header">
                         <h2>Song Library</h2>
                         <span id="library-count">0 Songs</span>
+                        <button id="delete-toggle" class="ss-icon-btn" onclick="toggleDeleteMode()"
+                            title="Delete Songs">🗑️</button>
                     </div>
                     <div id="song-list-container"></div>
                     <div class="ss-left-footer">
                         <label for="file-input" class="ss-btn ss-upload-btn"><span>📂 Import Folder</span></label>
+                        <label for="zip-input" class="ss-btn ss-zip-btn"><span>📦 Import Zip</span></label>
                         <button class="ss-btn ss-settings-btn" onclick="openSettings()">⚙️</button>
                         <input type="file" id="file-input" webkitdirectory directory multiple style="display:none;">
+                        <input type="file" id="zip-input" accept=".zip" style="display:none;">
                     </div>
                 </div>
 
@@ -69,8 +74,31 @@
                                     <div class="calc-row"><span>Stamina</span> <span id="calc-stamina">0.0</span></div>
                                     <div class="calc-row"
                                         style="border-top:1px solid #444; padding-top:5px; margin-top:5px;">
-                                        <span>NPS</span> <span id="calc-nps">0.0</span></div>
+                                        <span>NPS</span> <span id="calc-nps">0.0</span>
+                                    </div>
                                     <div class="calc-row"><span>Peak NPS</span> <span id="calc-peak">0.0</span></div>
+                                </div>
+
+                                <!-- Best Score Display -->
+                                <div id="ss-best-score-display" style="display:none;">
+                                    <h4>BEST SCORE</h4>
+                                    <div class="ss-bs-content">
+                                        <!-- Col 1: Grade -->
+                                        <div class="ss-bs-col-grade">
+                                            <div class="ss-bs-grade" id="bs-grade">-</div>
+                                            <div class="ss-bs-score" id="bs-score">000,000</div>
+                                        </div>
+                                        <!-- Col 2: Info (SSR, Clear) -->
+                                        <div class="ss-bs-col-info">
+                                            <div class="ss-bs-ssr">SSR: <span id="bs-ssr">0.00</span></div>
+                                            <div class="ss-bs-acc" id="bs-acc">0.00%</div>
+                                            <div class="ss-bs-clear" id="bs-clear">-</div>
+                                        </div>
+                                        <!-- Col 3: Mini Judgements -->
+                                        <div class="ss-bs-col-judge" id="bs-judge-grid">
+                                            <!-- Configured in JS -->
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -81,11 +109,13 @@
             </div>
 
             <div id="loading-status" style="display:none;">
-                <div class="spinner"></div><span id="loading-text">Processing...</span>
+                <div class="spinner"></div>
+                <div class="loading-content"><span id="loading-text">Processing...</span><span id="loading-subtext"
+                        style="font-size: 0.8rem; color: #aaa;"></span></div>
             </div>
         </div>
 
-        <!-- Settings Modal (Restored Structure) -->
+        <!-- Settings Modal -->
         <div id="settings-modal" style="display:none;">
             <h2>Settings</h2>
             <div class="settings-content">
@@ -113,10 +143,12 @@
                     <div class="setting-row keybinds">
                         <label>Keybinds</label>
                         <div class="key-inputs">
-                            <input type="text" id="key-0" maxlength="1" value="d">
-                            <input type="text" id="key-1" maxlength="1" value="f">
-                            <input type="text" id="key-2" maxlength="1" value="j">
-                            <input type="text" id="key-3" maxlength="1" value="k">
+                            <div class="key-inputs">
+                                <button id="key-btn-0" class="key-bind-btn" onclick="startKeyBind(0)">D</button>
+                                <button id="key-btn-1" class="key-bind-btn" onclick="startKeyBind(1)">F</button>
+                                <button id="key-btn-2" class="key-bind-btn" onclick="startKeyBind(2)">J</button>
+                                <button id="key-btn-3" class="key-bind-btn" onclick="startKeyBind(3)">K</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -129,13 +161,11 @@
         <!-- Gameplay HUD -->
         <div id="game-hud" style="display:none;">
 
-            <!-- Top Right Info -->
             <div class="hud-song-info">
                 <h2 id="hud-title">Song Title</h2>
                 <h3 id="hud-artist">Artist</h3>
             </div>
 
-            <!-- Left: Judgment Tracker -->
             <div id="judgment-tracker">
                 <div class="tracker-item judge-marvelous">MARV: <span id="count-marvelous">0</span></div>
                 <div class="tracker-item judge-perfect">PERF: <span id="count-perfect">0</span></div>
@@ -145,10 +175,8 @@
                 <div class="tracker-item judge-miss">MISS: <span id="count-miss">0</span></div>
             </div>
 
-            <!-- Live Grade -->
             <div id="live-grade">AAA</div>
 
-            <!-- Right: NPS Graph & Life -->
             <div class="hud-right-panel">
                 <div id="nps-container">
                     <canvas id="npsGraph" width="150" height="80"></canvas>
@@ -165,17 +193,15 @@
                 </div>
             </div>
 
-            <!-- Center Overlay -->
+            <!-- Center Overlay (Combo, Judge, Acc, Error Bar) -->
             <div class="hud-center">
                 <div class="hud-acc-box">
-                    <div class="label">ACCURACY</div>
                     <div id="accuracy">0.0000%</div>
                 </div>
 
                 <div id="judgment"></div>
                 <div id="combo">0</div>
 
-                <!-- Error Bar -->
                 <div id="error-bar-container">
                     <div id="error-bar-center"></div>
                     <canvas id="errorBarCanvas" width="300" height="20"></canvas>
@@ -183,19 +209,22 @@
                 </div>
             </div>
 
-            <!-- Bottom Progress -->
             <div id="progress-container">
-                <div id="progress-bar"></div>
+                <span id="time-elapsed">0:00</span>
+                <div id="progress-bar-bg">
+                    <div id="progress-bar"></div>
+                </div>
+                <span id="time-total">0:00</span>
             </div>
-
             <div id="failed-overlay" style="display:none;">FAILED</div>
         </div>
 
         <!-- Pause Menu -->
         <div id="pause-menu" style="display:none;">
             <h2>PAUSED</h2>
-            <button onclick="resumeGame()">Resume</button>
-            <button onclick="quitGame()">Quit</button>
+            <div class="pause-stat">Pauses: <span id="pause-count-val">0</span></div>
+            <button class="pause-btn" onclick="resumeGame()">Resume</button>
+            <button class="pause-btn quit" onclick="quitGame()">Quit</button>
         </div>
 
         <!-- Results Screen -->
@@ -216,7 +245,7 @@
                     </div>
                     <div id="res-acc-box">
                         <span id="res-acc">0.00%</span>
-                        <span id="res-ssr-display">SSR: 0.00</span>
+                        <span id="res-ssr">SSR: 0.00</span> <!-- Renamed ID to match JS -->
                     </div>
 
                     <div class="res-data-grid">
@@ -249,7 +278,7 @@
                         <div class="res-score-col">
                             <div class="res-stat-item"><span>SCORE</span> <span id="res-score">0</span></div>
                             <div class="res-stat-item"><span>DP</span> <span id="res-dp">0.00</span></div>
-                            <div class="res-stat-item"><span>SSR</span> <span id="res-ssr">0.00</span></div>
+                            <!-- Removed Duplicate SSR Item -->
                             <div class="res-stat-item"><span>MAX COMBO</span> <span id="res-combo">0</span> <span
                                     id="res-combo-pct" class="sub-pct-inline"></span></div>
                         </div>
@@ -267,15 +296,15 @@
                 <div class="res-right-panel">
                     <div class="leaderboard-container">
                         <h3>Accuracy Graph</h3>
-                        <canvas id="accuracyChart" width="450" height="250"></canvas>
+                        <canvas id="accuracyChart" width="450" height="200"></canvas>
                         <div id="leaderboard-list" style="display:none;"></div>
                     </div>
 
                     <div class="charts-container">
                         <h4>Hit Distribution</h4>
-                        <canvas id="offsetChart" width="450" height="100"></canvas>
+                        <canvas id="offsetChart" width="450" height="200"></canvas>
                         <h4>Life & Combo</h4>
-                        <canvas id="lifeComboChart" width="450" height="100"></canvas>
+                        <canvas id="lifeComboChart" width="450" height="200"></canvas>
                     </div>
                 </div>
             </div>
