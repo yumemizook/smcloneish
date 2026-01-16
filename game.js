@@ -44,7 +44,8 @@ function parseSM(text) {
     text = text.replace(/\/\/.*$/mg, '');
 
     const getTag = (tag) => {
-        const match = text.match(new RegExp(`#${tag}:(.*?);`, 'i'));
+        // Changed to [\s\S]*? to match across newlines
+        const match = text.match(new RegExp(`#${tag}:([\\s\\S]*?);`, 'i'));
         return match ? match[1].trim() : null;
     };
 
@@ -501,11 +502,15 @@ function selectDifficulty(chartIndex) {
     // Best Score Display
     const key = `webSM_lb_${songLibrary[selectedSongIndex].meta.title}_${chart.difficulty}`;
     const bsContainer = document.getElementById('ss-best-score-display');
+    const jGrid = document.getElementById('bs-judge-grid');
+
     try {
+        bsContainer.style.display = 'block'; // Always show
+        if (jGrid) jGrid.innerHTML = ''; // Clear judges
+
         const lb = JSON.parse(localStorage.getItem(key)) || [];
         if (lb.length > 0) {
             const top = lb[0];
-            bsContainer.style.display = 'block';
 
             // Grade & Score
             const gEl = document.getElementById('bs-grade');
@@ -514,14 +519,16 @@ function selectDifficulty(chartIndex) {
             setText('bs-score', parseInt(top.score).toLocaleString());
 
             // Info Col
-            setText('bs-acc', top.acc + "%");
+            // Acc Formatting: >= 99.7 used 4 decimals, else 2
+            const accVal = parseFloat(top.acc);
+            const accText = accVal >= 99.7 ? accVal.toFixed(4) : accVal.toFixed(2);
+            setText('bs-acc', accText + "%");
+
             setText('bs-ssr', (top.ssr || 0).toFixed(2));
             setText('bs-clear', top.fcType || "");
 
-            // Judge Grid (Now Row)
-            const jGrid = document.getElementById('bs-judge-grid');
+            // Judge Grid
             if (jGrid) {
-                jGrid.innerHTML = '';
                 const J = top.judgments || {};
                 const addJ = (val, color) => {
                     jGrid.innerHTML += `<span style="color:${color}; margin-right:10px; font-weight:bold; font-size:1.1rem; text-shadow:0 0 5px currentColor;">${val || 0}</span>`;
@@ -535,10 +542,21 @@ function selectDifficulty(chartIndex) {
             }
 
         } else {
-            bsContainer.style.display = 'none';
+            // No Scores State
+            const gEl = document.getElementById('bs-grade');
+            gEl.innerText = "-";
+            gEl.style.color = "#fff";
+            setText('bs-score', "000,000");
+            setText('bs-acc', "0.00%");
+            setText('bs-ssr', "0.00");
+            setText('bs-clear', "-");
+            if (jGrid) jGrid.innerHTML = '<span style="color:#666; font-style:italic;">No scores yet</span>';
         }
     } catch (e) {
-        bsContainer.style.display = 'none';
+        bsContainer.style.display = 'block';
+        const gEl = document.getElementById('bs-grade');
+        gEl.innerText = "-";
+        setText('bs-score', "000,000");
         console.error(e);
     }
 
@@ -581,6 +599,10 @@ function calculateDetailedDifficulty(notes) {
 
         const nps = noteCount / windowSize;
         if (nps > maxNPS) maxNPS = nps;
+
+        // Rate Mod: Scale NPS/Density logic if we wanted "perceived" difficulty, but usually difficulty is chart-intrinsic.
+        // We'll leave difficulty calc as "native chart speed".
+
 
         let sStr = nps; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
         let sJs = nps; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
@@ -642,10 +664,11 @@ async function startGameFromMenu() {
         try {
             const ab = await song.audioBlob.arrayBuffer();
             const decoded = await audioCtx.decodeAudioData(ab);
+            audioBuffer = decoded; // Set global buffer
 
             document.getElementById('loading-status').style.display = 'none';
 
-            // Calc stats again to pass to game state
+            // Calc for stats
             const difficultyCalc = calculateDetailedDifficulty(chart.notes);
             initGame(chart, decoded, song.meta, difficultyCalc);
         } catch (e) {
@@ -801,7 +824,35 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 
     const jEl = document.getElementById('judgment');
     if (jEl) {
-        jEl.innerText = judgeText; jEl.className = judgeClass;
+        // New Sprite Logic: Neo Sekai 2x6
+        // Columns: 0 (Normal/Early?), 1 (Late?)
+        // Rows: Marvelous, Perfect, Great, Good, Bad, Miss
+        // We'll use classes to set background-position.
+        // Assuming user wants Early/Late distinction.
+        // isMiss doesn't have offsets usually, or we treat as Late? Miss is row 6.
+
+        let timingClass = "early";
+        if (offsetMs > 0) timingClass = "late"; // Positive offset = hit late? 
+        // offset = noteTime - hitTime. 
+        // If note is at 1000, hit at 900 (early), offset = 100. (Positive)
+        // If note is at 1000, hit at 1100 (late), offset = -100. (Negative)
+        // CHECK hit logic: usually offset = note.time - inputTime.
+        // Let's verify standard: Input at 900 for 1000 note -> Early.
+        // If I define offset = note.time - inputTime (100).
+        // If I define offset = inputTime - note.time (-100).
+        // Let's assume standard SM: Early is usually negative in some engines, positive in others.
+        // In my code: offset = note.time - currentTime. 
+        // If note.time (10.0) > currentTime (9.9), offset is +0.1. (Early)
+        // So offset > 0 is Early. offset < 0 is Late.
+
+        if (offsetMs < 0) timingClass = "late";
+        else timingClass = "early";
+
+        if (isMiss) timingClass = "late"; // Miss is just MissFrame
+
+        jEl.className = `${judgeClass} ${timingClass}`;
+        jEl.innerText = ""; // Hide text, use sprite
+
         jEl.style.animation = 'none'; jEl.offsetHeight; jEl.style.animation = 'pulse 0.1s';
     }
 
@@ -997,7 +1048,7 @@ function handleLeaderboard() {
 
     const entry = {
         score: Math.round(gameState.score),
-        grade: getGrade(acc * 100),
+        grade: gameState.failed ? "F" : getGrade(acc * 100),
         acc: (acc * 100).toFixed(2),
         date: new Date().toLocaleDateString(),
         judgments: gameState.judgments,
@@ -1055,7 +1106,7 @@ function showResults() {
         gradeEl.style.color = getGradeColor(grade);
         gradeEl.style.textShadow = `0 0 30px ${getGradeColor(grade)}`;
     }
-    setText('res-acc', accPct >= 99.90 ? accPct.toFixed(4) + "%" : accPct.toFixed(2) + "%");
+    setText('res-acc', accPct >= 99.70 ? accPct.toFixed(4) + "%" : accPct.toFixed(2) + "%");
     setText('res-score', Math.round(gameState.score).toLocaleString());
     setText('res-dp', gameState.accumulatedAccuracyPoints.toFixed(2));
     setText('res-ssr', ssr.toFixed(2));
@@ -1094,6 +1145,7 @@ function quitGame() {
     gameState.failed = false;
 
     setScreen('setup-panel');
+    document.getElementById('pause-menu').style.display = 'none';
 
     const cvs = document.getElementById('gameCanvas');
     if (cvs) {
@@ -1113,21 +1165,51 @@ function setupCanvas() {
     gameConfig.columnWidth = canvas.width / 4;
     gameConfig.arrowSize = gameConfig.columnWidth * 0.9;
     if (userConfig.downScroll) {
-        gameConfig.receptorY = (canvas.height * 0.9) - 65;
+        // Downscroll: Base is 0.9. Move 65 (margin) + 20 (offset).
+        // Request: "move the downscroll receptors' absolute positions up by 20px"
+        // Previous (Baseline): `height*0.9 - 65`.
+        // Up by 20px: `- 65 - 20`.
+        gameConfig.receptorY = (canvas.height * 0.9) - 65 - 20;
     } else {
-        gameConfig.receptorY = (canvas.height * 0.1) + 65;
+        // Upscroll: Base is 0.1.
+        // Request: "move the upscroll receptors' absolute positions up by 40px"
+        // Previous (Baseline): `height*0.1 + 65`.
+        // Up by 40px: `+ 65 - 40`.
+        gameConfig.receptorY = (canvas.height * 0.1) + 65 - 40;
     }
     let visibleDistance = userConfig.downScroll ? gameConfig.receptorY : canvas.height - gameConfig.receptorY;
     gameConfig.scrollSpeed = visibleDistance / (userConfig.scrollTime / 1000);
 }
 function getNoteRowIndex(beat) { const b = Math.abs(beat); const epsilon = 0.01; const isSnap = (div) => Math.abs((b * div) - Math.round(b * div)) < epsilon; if (isSnap(1)) return 0; if (isSnap(2)) return 1; if (isSnap(3)) return 2; if (isSnap(4)) return 3; if (isSnap(6)) return 4; if (isSnap(8)) return 5; if (isSnap(12)) return 6; return 7; }
 function drawReceptor(x, y, rotation, colIndex) {
-    ctx.save(); const halfSize = gameConfig.columnWidth / 2; ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2; if (assets.loaded.receptorSprite) { const img = assets.receptorSprite; const sx = gameState.heldKeys[colIndex] ? img.width / 2 : 0; ctx.drawImage(img, sx, 0, img.width / 2, img.height, offset, offset, drawSize, drawSize); } else { ctx.beginPath(); const s = drawSize / 2.5; ctx.strokeStyle = gameState.heldKeys[colIndex] ? '#fff' : '#aaa'; ctx.lineWidth = 4; ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(s / 2, 0); ctx.lineTo(s / 2, s); ctx.lineTo(-s / 2, s); ctx.lineTo(-s / 2, 0); ctx.lineTo(-s, 0); ctx.closePath(); ctx.stroke(); } const isHoldingActive = gameState.activeNotes.some(n => n.col === colIndex && n.holdState === 'active' && !n.processed && (n.type === 'hold' || n.type === 'roll')); if (isHoldingActive && assets.loaded.holdExplosion) { const expImg = assets.holdExplosion; const frame = Math.floor(Date.now() / 50) % 2; const fw = expImg.width / 2; ctx.drawImage(expImg, frame * fw, 0, fw, expImg.height, offset, offset, drawSize, drawSize); } ctx.restore();
-    // --- Draw Keypress (Static Overlay for feedback) --- 
-    // Removed per user request
+    ctx.save(); const halfSize = gameConfig.columnWidth / 2; ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2; if (assets.loaded.receptorSprite) { const img = assets.receptorSprite; const sx = gameState.heldKeys[colIndex] ? img.width / 2 : 0; ctx.drawImage(img, sx, 0, img.width / 2, img.height, offset, offset, drawSize, drawSize); } else { ctx.beginPath(); const s = drawSize / 2.5; ctx.strokeStyle = gameState.heldKeys[colIndex] ? '#fff' : '#aaa'; ctx.lineWidth = 4; ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(s / 2, 0); ctx.lineTo(s / 2, s); ctx.lineTo(-s / 2, s); ctx.lineTo(-s / 2, 0); ctx.lineTo(-s, 0); ctx.closePath(); ctx.stroke(); }
 
+    // Optimization: Check only visible range or usage caching. For now, using a specialized search in a small window is better than O(N).
+    // Or simpler: We can iterate active notes in the game loop and flag check.
+    // Let's use the optimized loop in gameLoop to populate 'activeHoldCols' for this frame.
+    // Fallback: If colsActive is undefined (first frame?), use default false.
+    const isHoldingActive = gameState.colsActive && gameState.colsActive[colIndex];
+
+    if (isHoldingActive && assets.loaded.holdExplosion) {
+        const expImg = assets.holdExplosion;
+        const frame = Math.floor(Date.now() / 50) % 2;
+        const fw = expImg.width / 2;
+        // Fix: Use drawSize (receptor size) to ensure it matches width
+        ctx.drawImage(expImg, frame * fw, 0, fw, expImg.height, offset, offset, drawSize, drawSize);
+    }
+    ctx.restore();
 }
-function drawNote(note, y, rotation) { ctx.save(); const halfSize = gameConfig.columnWidth / 2; const x = note.col * gameConfig.columnWidth; if ((note.type === 'hold' || note.type === 'roll') && note.endTime) { let tailY; const duration = note.endTime - note.time; let dist = duration * gameConfig.scrollSpeed; if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist; let drawHeadY = y; let drawTailY = tailY; if (note.holdState === 'active') { drawHeadY = gameConfig.receptorY; } const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody; const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody; if (bodyLoaded) { ctx.save(); ctx.beginPath(); const w = gameConfig.arrowSize; const bx = x + (gameConfig.columnWidth - w) / 2; let ry = userConfig.downScroll ? drawTailY : drawHeadY; let rh = Math.abs(drawHeadY - drawTailY); ctx.rect(bx, ry, w, rh); ctx.clip(); const scale = w / bodyImg.width; const sHeight = bodyImg.height * scale; const count = Math.ceil(rh / sHeight) + 1; const scrollOffset = (Date.now() / 10) % sHeight; for (let k = -1; k < count; k++) { ctx.drawImage(bodyImg, bx, ry + (k * sHeight) - scrollOffset, w, sHeight); } ctx.restore(); } } ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2; if (note.type === 'mine' && assets.loaded.mineSprite) { const frames = 8; const frame = Math.floor(gameState.globalFrame / 10) % frames; const fw = assets.mineSprite.width; const fh = assets.mineSprite.height / 8; ctx.drawImage(assets.mineSprite, 0, frame * fh, fw, fh, offset, offset, drawSize, drawSize); } else { let img = assets.arrowSprite; let rowIndex = getNoteRowIndex(note.beat); if (note.holdState === 'active' && assets.loaded.holdHeadActive) { img = assets.holdHeadActive; } if (assets.loaded.arrowSprite) { const sy = rowIndex * (img.height / 8); ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize); } else { ctx.fillStyle = '#fff'; ctx.fillRect(offset, offset, drawSize, drawSize); } } ctx.restore(); }
+function drawNote(note, y, rotation) {
+    ctx.save(); const halfSize = gameConfig.columnWidth / 2; const x = note.col * gameConfig.columnWidth; if ((note.type === 'hold' || note.type === 'roll') && note.endTime) { let tailY; const duration = note.endTime - note.time; let dist = duration * gameConfig.scrollSpeed; if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist; let drawHeadY = y; let drawTailY = tailY; if (note.holdState === 'active') { drawHeadY = gameConfig.receptorY; } const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody; const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody; if (bodyLoaded) { ctx.save(); ctx.beginPath(); const w = gameConfig.arrowSize; const bx = x + (gameConfig.columnWidth - w) / 2; let ry = userConfig.downScroll ? drawTailY : drawHeadY; let rh = Math.abs(drawHeadY - drawTailY); ctx.rect(bx, ry, w, rh); ctx.clip(); const scale = w / bodyImg.width; const sHeight = bodyImg.height * scale; const count = Math.ceil(rh / sHeight) + 1; const scrollOffset = (Date.now() / 10) % sHeight; for (let k = -1; k < count; k++) { ctx.drawImage(bodyImg, bx, ry + (k * sHeight) - scrollOffset, w, sHeight); } ctx.restore(); } } ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2;
+    if (note.type === 'mine' && assets.loaded.mineSprite) {
+        const frames = 8;
+        const frame = Math.floor(gameState.globalFrame / 10) % frames;
+        // Fix: Horizontal Sprite Sheet (8x1)
+        const fw = assets.mineSprite.width / 8;
+        const fh = assets.mineSprite.height;
+        ctx.drawImage(assets.mineSprite, frame * fw, 0, fw, fh, offset, offset, drawSize, drawSize);
+    } else { let img = assets.arrowSprite; let rowIndex = getNoteRowIndex(note.beat); if (note.holdState === 'active' && assets.loaded.holdHeadActive) { img = assets.holdHeadActive; } if (assets.loaded.arrowSprite) { const sy = rowIndex * (img.height / 8); ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize); } else { ctx.fillStyle = '#fff'; ctx.fillRect(offset, offset, drawSize, drawSize); } } ctx.restore();
+}
 function drawErrorBar() { const eb = document.getElementById('errorBarCanvas'); if (!eb) return; const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height); const scale = 150 / 180; const now = Date.now(); gameState.recentHits = gameState.recentHits.filter(h => now - h.time < 2000); gameState.recentHits.forEach(h => { const x = 150 - (h.offset * scale); const age = now - h.time; const alpha = 1 - (age / 2000); let color = "255, 255, 255"; const abs = Math.abs(h.offset); if (abs <= J_MARVELOUS) color = "163, 247, 255"; else if (abs <= J_PERFECT) color = "255, 230, 0"; else if (abs <= J_GREAT) color = "68, 255, 75"; else if (abs <= J_GOOD) color = "0, 153, 255"; else if (abs <= J_BAD) color = "170, 0, 255"; else color = "255, 51, 51"; eCtx.fillStyle = `rgba(${color}, ${alpha})`; eCtx.fillRect(x - 1, 0, 3, 20); }); const offsets = gameState.hitOffsets; if (offsets.length > 0) { const sum = offsets.reduce((a, b) => a + b, 0); const mean = sum / offsets.length; setText('hit-mean', `${mean.toFixed(2)}ms`); } }
 function drawNPSGraph() { const c = document.getElementById('npsGraph'); if (!c) return; const ctx = c.getContext('2d'); const w = c.width; const h = c.height; ctx.clearRect(0, 0, w, h); const now = audioCtx.currentTime - gameState.startTime; if (gameState.globalFrame % 10 === 0) { let count = 0; for (let n of gameState.notes) { if (n.time > now - 1 && n.time <= now) count++; if (n.time > now) break; } gameState.currentNPS = count; if (count > gameState.peakNPS) gameState.peakNPS = count; gameState.npsHistory.push({ time: now, val: count }); if (gameState.npsHistory.length > 50) gameState.npsHistory.shift(); } setText('hud-nps', gameState.currentNPS); setText('hud-peak-nps', gameState.peakNPS); ctx.strokeStyle = "#00e5ff"; ctx.lineWidth = 2; ctx.beginPath(); const maxVal = Math.max(10, gameState.peakNPS); gameState.npsHistory.forEach((p, i) => { const x = (i / 50) * w; const y = h - (p.val / maxVal * h); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }); ctx.stroke(); }
 function gameLoop() {
@@ -1135,13 +1217,47 @@ function gameLoop() {
     const currentTime = audioCtx.currentTime - gameState.startTime;
     gameState.globalFrame++;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Update First Active Note (Skip old processed notes)
+    // Note: hit/missed notes set .processed=true.
+    while (gameState.firstActiveNoteIndex < gameState.activeNotes.length) {
+        if (!gameState.activeNotes[gameState.firstActiveNoteIndex].processed) break;
+        gameState.firstActiveNoteIndex++;
+    }
+
+    // Pre-calculate active holds for this frame to optimize drawReceptor
+    gameState.colsActive = [false, false, false, false];
+
+    // Determine visible Window
+    const visibleNotes = [];
+    const maxVisibleTime = currentTime + (canvas.height / gameConfig.scrollSpeed) + 2.0; // Buffer
+
+    for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+        const note = gameState.activeNotes[i];
+
+        // Check for Active Hold
+        if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+            gameState.colsActive[note.col] = true;
+        }
+
+        // Keep active holds even if time < currentTime
+        if (note.time > maxVisibleTime) {
+            // Optimization: Stop iterating if future notes are off screen
+            break;
+        }
+
+        visibleNotes.push(note);
+    }
+
     const spriteRotations = [90, 0, 180, 270];
     const vectorRotations = [270, 180, 0, 90];
     for (let i = 0; i < 4; i++) {
         let rot = assets.loaded.receptorSprite ? spriteRotations[i] : vectorRotations[i];
         drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rot, i);
     }
-    gameState.activeNotes.forEach(note => {
+
+    // Process & Draw Visible Notes
+    visibleNotes.forEach(note => {
         if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
             if (currentTime >= note.endTime) {
                 note.holdState = 'ok';
@@ -1167,16 +1283,55 @@ function gameLoop() {
             }
         }
         if (note.processed && note.holdState !== 'active') return;
+
         const timeDiff = note.time - currentTime;
         if (note.type === 'mine' && !note.processed) {
             const msDiff = timeDiff * 1000;
+            // Autoplay: Avoid mines? Or just ignore them. 
+            // Real autoplay usually avoids mines. We'll simply not hit them.
             if (Math.abs(msDiff) <= J_MINE_WINDOW) {
-                if (gameState.heldKeys[note.col]) {
+                if (gameState.heldKeys[note.col] && !gameState.isAutoPlay) {
                     triggerJudgement(note, msDiff, false);
                 }
             }
             if (msDiff < -J_MINE_WINDOW) { note.processed = true; return; }
         }
+
+        // AUTO PLAY LOGIC
+        if (gameState.isAutoPlay && !note.processed && !note.hit && note.type !== 'mine') {
+            if (timeDiff <= 0) { // Exact time or passed
+                note.hit = true;
+                gameState.heldKeys[note.col] = true; // Visual feedback
+                // Release key in next frames? We need a way to release.
+                // Simple hack: Set a timeout or track auto-held keys?
+                // For now, just setting it true might stick it.
+                // Better: set it true, and have a logic to clear it.
+                // Or just flash receptor.
+
+                // Trigger Marvelous
+                triggerJudgement(note, 0, false);
+
+                // For Holds/Rolls
+                if (note.type === 'hold' || note.type === 'roll') {
+                    note.holdState = 'active';
+                    // We need to keep key held.
+                    // We can add a property `note.autoHold = true` and clear it at endTime.
+                } else {
+                    // Tap note: release key quickly
+                    setTimeout(() => gameState.heldKeys[note.col] = false, 50);
+                }
+                return;
+            }
+        }
+
+        // Autoplay Hold Release
+        if (gameState.isAutoPlay && (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+            gameState.heldKeys[note.col] = true; // Keep holding
+            if (currentTime >= note.endTime) {
+                gameState.heldKeys[note.col] = false; // Release
+            }
+        }
+
         if (timeDiff < -(J_MISS_WINDOW / 1000) && !note.hit && note.type !== 'mine' && note.holdState === 'inactive') {
             note.processed = true;
             triggerJudgement(note, J_MISS_WINDOW + 1, true);
@@ -1191,6 +1346,7 @@ function gameLoop() {
             drawNote(note, y, rot);
         }
     });
+
     drawErrorBar();
     drawNPSGraph();
 
@@ -1277,6 +1433,7 @@ function saveSettings() {
 }
 window.saveSettings = saveSettings;
 
+
 function togglePause() {
     if (!gameState.isPlaying || gameState.failed) return;
 
@@ -1286,18 +1443,230 @@ function togglePause() {
         gameState.isPaused = true;
         audioCtx.suspend();
         gameState.pauseCount++; // Increment pause count
+
+        // Update Pause Menu UI
+        setText('pause-song-title', gameState.meta.title);
+        setText('pause-song-artist', gameState.meta.artist);
+
+        const acc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed * 2)) : 0;
+        setText('pause-score', Math.round(gameState.score).toLocaleString());
+        setText('pause-acc', (acc * 100).toFixed(2) + "%");
+        setText('pause-combo', gameState.combo);
         setText('pause-count-val', gameState.pauseCount);
-        setScreen('pause-menu');
+
+        // Mini Judges
+        const judges = ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss'];
+        const judgesContainer = document.getElementById('pause-judges');
+        if (judgesContainer) {
+            judgesContainer.innerHTML = judges.map(j => `
+                <div class="p-mini-judge-item">
+                    <span class="p-mini-judge-val judge-${j}">${gameState.judgments[j]}</span>
+                    <span style="font-size:0.6rem; color:#666; text-transform:uppercase;">${j.substr(0, 3)}</span>
+                </div>
+            `).join('');
+        }
+
+        // Show Overlay
+        document.getElementById('pause-menu').style.display = 'flex';
+
+        // SYNC: Record when we paused
+        gameState.pauseStartTime = audioCtx.currentTime;
     }
 }
 window.togglePause = togglePause;
-function resumeGame() { if (!gameState.isPaused) return; gameState.isPaused = false; audioCtx.resume(); document.getElementById('pause-menu').style.display = 'none'; requestAnimationFrame(gameLoop); } window.resumeGame = resumeGame; function handleInput(e) { if (e.code === 'Escape') { if (e.type === 'keydown') togglePause(); return; } if (!gameState.isPlaying || gameState.isPaused) return; const key = e.key.toLowerCase(); const colIndex = userConfig.keys.indexOf(key); if (colIndex === -1) return; if (e.type === 'keydown') { gameState.heldKeys[colIndex] = true; gameState.activeNotes.forEach(n => { if (n.col === colIndex && n.type === 'roll' && n.holdState === 'active') { n.lastPressTime = audioCtx.currentTime - gameState.startTime; } }); } if (e.type === 'keyup') gameState.heldKeys[colIndex] = false; if (e.type !== 'keydown') return; const currentTime = audioCtx.currentTime - gameState.startTime; const hittableNote = gameState.activeNotes.find(n => n.col === colIndex && !n.processed && n.type !== 'mine' && Math.abs(n.time - currentTime) < (J_BAD / 1000)); if (hittableNote) { hittableNote.hit = true; const diffMs = (hittableNote.time - currentTime) * 1000; triggerJudgement(hittableNote, diffMs, false); } } window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
+
+function resumeGame() {
+    if (!gameState.isPaused) return;
+    gameState.isPaused = false;
+    audioCtx.resume();
+    document.getElementById('pause-menu').style.display = 'none';
+
+    // SYNC: Compensation
+    // If audio was running, currentTime would increase.
+    // If audio was suspended, currentTime might be frozen OR running depending on browser/implementation.
+    // The safest way is to shift startTime by the duration of the pause.
+    if (gameState.pauseStartTime) {
+        const drift = audioCtx.currentTime - gameState.pauseStartTime;
+        gameState.startTime += drift;
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+window.resumeGame = resumeGame; function handleInput(e) {
+    if (e.code === 'Escape') { if (e.type === 'keydown') togglePause(); return; }
+    if (!gameState.isPlaying || gameState.isPaused) return;
+    const key = e.key.toLowerCase();
+    const colIndex = userConfig.keys.indexOf(key);
+    if (colIndex === -1) return;
+
+    if (e.type === 'keydown') {
+        gameState.heldKeys[colIndex] = true;
+
+        // Optimization: Find active roll to start holding
+        // Since we track firstActiveNoteIndex, we can start there.
+        // We need to find if there is an ACTIVE roll in this column.
+        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+            const n = gameState.activeNotes[i];
+            // Optimization: If note is too far in future, stop? 
+            // Active holds are usually "current" time or past (if held long).
+            // But a new press on a roll that is active? 
+            // Rolls become active when hit. If it's active, it's endTime > currentTime.
+            // So it should be within visible range mostly.
+            if (n.time > (audioCtx.currentTime - gameState.startTime) + 2.0) break; // Optimization break
+
+            if (n.col === colIndex && n.type === 'roll' && n.holdState === 'active') {
+                n.lastPressTime = audioCtx.currentTime - gameState.startTime;
+                break; // Only one active hold per column possible
+            }
+        }
+    }
+
+    if (e.type === 'keyup') gameState.heldKeys[colIndex] = false;
+
+    if (e.type !== 'keydown') return;
+
+    const currentTime = audioCtx.currentTime - gameState.startTime;
+
+    // Find Hittable Note - Optimized Search
+    let hittableNote = null;
+    for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+        const n = gameState.activeNotes[i];
+        if (n.processed) continue;
+
+        // Time diff
+        const diff = n.time - currentTime;
+
+        // Too old to hit? (Already missed/processed logic should handle this, but double check)
+        if (diff < -(J_BAD / 1000)) continue;
+
+        // Too far in future?
+        if (diff > (J_BAD / 1000)) break;
+
+        if (n.col === colIndex && n.type !== 'mine') {
+            // Found best candidate (first one in window)
+            hittableNote = n;
+            break;
+        }
+    }
+
+    if (hittableNote) {
+        hittableNote.hit = true;
+        const diffMs = (hittableNote.time - currentTime) * 1000;
+        triggerJudgement(hittableNote, diffMs, false);
+    }
+} window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
+
+// ** INITIALIZE GAME STATE **
 function initGame(chartInfo, audioBuf, meta, diffStats) {
-    setScreen('game-hud'); document.getElementById('gameCanvas').style.display = 'block'; setText('judgment', ""); document.getElementById('combo').style.display = 'none'; const accLabel = document.querySelector('.acc-box .label'); if (accLabel) accLabel.style.display = 'none'; setText('hit-mean', 'Mean: 0.00ms'); setText('hud-title', meta.title); setText('hud-artist', meta.artist); gameState.meta = meta; gameState.chartInfo = chartInfo; gameState.difficultyStats = diffStats; gameState.notes = chartInfo.notes; gameState.activeNotes = JSON.parse(JSON.stringify(chartInfo.notes)); gameState.totalNotesInChart = chartInfo.notes.length; gameState.combo = 0; gameState.maxCombo = 0; gameState.score = 0; gameState.accumulatedAccuracyPoints = 0; gameState.totalNotesHitOrMissed = 0; gameState.judgments = { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0, ok: 0, ng: 0, mine: 0 }; gameState.hitOffsets = []; gameState.detailedHits = []; gameState.life = 50; gameState.lifeHistory = []; gameState.comboHistory = []; gameState.accuracyHistory = [{ time: 0, acc: 0, grade: 'D' }]; gameState.npsHistory = []; gameState.recentHits = []; gameState.isPaused = false; gameState.heldKeys = [false, false, false, false]; gameState.failed = false; document.getElementById('failed-overlay').style.display = 'none'; updateJudgmentTracker(); updateScoreDisplay(); audioBuffer = audioBuf; gameState.pauseCount = 0; // Init pause count
+    gameState = {
+        score: 0,
+        combo: 0,
+        maxCombo: 0,
+        life: 50,
+        judgments: { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0, ok: 0, ng: 0, mine: 0 },
+        accuracyHistory: [],
+        lifeHistory: [],
+        comboHistory: [],
+        hitOffsets: [],
+        recentHits: [],
+        detailedHits: [],
+        accumulatedAccuracyPoints: 0,
+        totalNotesHitOrMissed: 0,
+        isPlaying: true,
+        startTime: 0,
+        failed: false,
+        paused: false,
+        pauseTime: 0,
+        totalPauseDuration: 0,
+        pauseStartTime: 0,
+        meta: meta,
+        chart: chartInfo,
+        totalNotesInChart: 0,
+        difficultyStats: diffStats,
+        firstActiveNoteIndex: 0,
+        activeNotes: [],
+        pauseCount: 0,
+        isPaused: false,
+        heldKeys: [false, false, false, false],
+        npsHistory: [],
+        currentNPS: 0,
+        peakNPS: 0
+    };
+
+    setScreen('game-hud');
+    document.getElementById('gameCanvas').style.display = 'block';
+    setText('judgment', "");
+    document.getElementById('combo').style.display = 'none';
+    const accLabel = document.querySelector('.acc-box .label');
+    if (accLabel) accLabel.style.display = 'none';
+    setText('hit-mean', 'Mean: 0.00ms');
+    setText('hud-title', meta.title);
+    setText('hud-artist', meta.artist);
+    document.getElementById('failed-overlay').style.display = 'none';
+    updateJudgmentTracker();
+    updateScoreDisplay();
+
+    // Deep copy and apply Modifiers
+    let notes = JSON.parse(JSON.stringify(chartInfo.notes));
+
+    // Random / Turn
+    if (typeof modConfig !== 'undefined' && modConfig.turn && modConfig.turn !== 'none') {
+        const colMap = [0, 1, 2, 3];
+        if (modConfig.turn === 'mirror') {
+            // 0<->3, 1<->2
+            colMap[0] = 3; colMap[1] = 2; colMap[2] = 1; colMap[3] = 0;
+        } else if (modConfig.turn === 'shuffle') {
+            // Random permutation
+            for (let i = colMap.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [colMap[i], colMap[j]] = [colMap[j], colMap[i]];
+            }
+        }
+        notes.forEach(n => { n.col = colMap[n.col]; });
+    }
+
+    gameState.notes = notes;
+    gameState.activeNotes = gameState.notes; // For now all notes are "active" candidates
+    gameState.totalNotesInChart = notes.filter(n => n.type !== 'mine').length;
+
+    // Fix: Add Event Listeners for Pause Menu Buttons
+    const resumeBtn = document.getElementById('pause-resume-btn');
+    const quitBtn = document.getElementById('pause-quit-btn');
+    if (resumeBtn) resumeBtn.onclick = resumeGame;
+    if (quitBtn) quitBtn.onclick = quitGame;
 
     // Start Audio
+    audioBuffer = audioBuf; // Global ref update?
     startEngine();
-} function startEngine() { setupCanvas(); if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioSource = audioCtx.createBufferSource(); audioSource.buffer = audioBuffer; audioSource.connect(audioCtx.destination); const startTime = audioCtx.currentTime + 1.0; audioSource.start(startTime); gameState.startTime = startTime; gameState.isPlaying = true; requestAnimationFrame(gameLoop); } function parseSM(text) {
+}
+
+function startEngine() {
+    setupCanvas();
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    if (audioSource) audioSource.stop(); // Stop potential previous
+    audioSource = audioCtx.createBufferSource();
+    audioSource.buffer = audioBuffer;
+
+    // Rate Mod
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    audioSource.playbackRate.value = rate;
+
+    audioSource.connect(audioCtx.destination);
+    const startTime = audioCtx.currentTime + 1.0; // 1s buffer
+    audioSource.start(startTime);
+
+    gameState.startTime = startTime;
+    gameState.isPlaying = true;
+
+    // Sync Config
+    if (typeof modConfig !== 'undefined') {
+        userConfig.scrollTime = modConfig.scrollSpeed;
+        userConfig.downScroll = (modConfig.scrollDirection === 'down');
+    }
+
+    requestAnimationFrame(gameLoop);
+} function parseSM(text) {
     const charts = [];
     const meta = {};
     text = text.replace(/\/\/.*$/mg, '');
@@ -1372,71 +1741,162 @@ const statusDiv = document.getElementById('loading-status');
 
 fileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
-    const smFile = files.find(f => f.name.toLowerCase().endsWith('.sm') || f.name.toLowerCase().endsWith('.ssc'));
-    if (!smFile) { alert("No .sm file found."); return; }
+    // Filter for SM/SSC files
+    const smFiles = files.filter(f => f.name.toLowerCase().endsWith('.sm') || f.name.toLowerCase().endsWith('.ssc'));
+
+    if (smFiles.length === 0) { alert("No .sm or .ssc files found."); return; }
 
     setScreen('loading-status');
     statusDiv.style.display = 'block';
 
+    let loadedCount = 0;
+    let selectedSongIndex = -1;
+
     try {
-        const text = await smFile.text();
-        const parsedData = parseSM(text);
+        for (let i = 0; i < smFiles.length; i++) {
+            const smFile = smFiles[i];
+            setText('loading-text', `Importing Songs (${i + 1}/${smFiles.length})`);
 
-        // === Duplicate Check ===
-        // === Duplicate Check ===
-        const duplicateIndex = songLibrary.findIndex(s =>
-            s.meta.title.toLowerCase() === parsedData.meta.title.toLowerCase() &&
-            s.meta.artist.toLowerCase() === parsedData.meta.artist.toLowerCase()
-        );
+            const text = await smFile.text();
+            const parsedData = parseSM(text);
 
-        let targetIndex = -1;
+            // Determine root path for this song (from the SM file's path)
+            // webkitRelativePath example: "Pack/SongFolder/song.sm" -> root: "Pack/SongFolder"
+            const fullPath = smFile.webkitRelativePath || smFile.name;
+            const pathParts = fullPath.split('/');
+            pathParts.pop(); // remove filename
+            const rootPath = pathParts.join('/');
 
-        if (duplicateIndex !== -1) {
-            // REPLACE existing
-            if (confirm(`Song "${parsedData.meta.title}" already exists. Replace/Repair it?`)) {
-                targetIndex = duplicateIndex;
-                console.log(`Replacing/Repairing song: ${parsedData.meta.title}`);
-            } else {
-                setScreen('setup-panel');
-                document.getElementById('loading-status').style.display = 'none';
-                return;
+            const findFileInFolder = (name, type) => {
+                // type: 'banner', 'background', 'audio', etc. (for fallbacks)
+                const normalize = (p) => p.replace(/\\/g, '/').toLowerCase();
+
+                // 1. If name is provided, try specific matching
+                if (name) {
+                    const targetPath = normalize(rootPath ? `${rootPath}/${name}` : name);
+                    const targetNameVal = name.split('/').pop().toLowerCase();
+                    const targetBase = targetNameVal.substring(0, targetNameVal.lastIndexOf('.')) || targetNameVal;
+
+                    // A. Exact Path Match
+                    let found = files.find(f => normalize(f.webkitRelativePath || f.name) === targetPath);
+                    if (found) return found;
+
+                    // B. Filename Match in same folder (ignore extension mismatch)
+                    // Iterate files in the root folder
+                    found = files.find(f => {
+                        const fPath = normalize(f.webkitRelativePath || f.name);
+                        const fDir = fPath.substring(0, fPath.lastIndexOf('/'));
+                        if (fDir !== normalize(rootPath)) return false;
+
+                        const fName = fPath.split('/').pop();
+                        const fBase = fName.substring(0, fName.lastIndexOf('.')) || fName;
+
+                        // Check full filename match OR basename match
+                        // Priority to full filename match but we already checked exact path.
+                        // So here we check if base name matches (e.g. banner.png vs banner.bmp)
+                        return fBase === targetBase;
+                    });
+                    if (found) return found;
+                }
+
+                // 2. Fallbacks if name not found or not provided
+                if (type) {
+                    const candidates = [];
+                    if (type === 'banner') candidates.push('banner', 'bn', 'in');
+                    if (type === 'background') candidates.push('bg', 'background', 'back');
+                    if (type === 'cdtitle') candidates.push('cdtitle', 'cd');
+
+                    const extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif'];
+
+                    for (let cand of candidates) {
+                        const found = files.find(f => {
+                            const fPath = normalize(f.webkitRelativePath || f.name);
+                            const lastSlash = fPath.lastIndexOf('/');
+                            const fDir = lastSlash === -1 ? "" : fPath.substring(0, lastSlash);
+
+                            // Loose check: ensure it is inside the rootPath
+                            // Actually, normalize(rootPath) should be strict equality for folder import
+                            if (fDir !== normalize(rootPath)) return false;
+
+                            const fName = fPath.split('/').pop();
+                            const fBase = fName.substring(0, fName.lastIndexOf('.')) || fName;
+                            return fBase === cand;
+                        });
+                        if (found) return found;
+                    }
+                }
+
+                console.log(`[AssetDebug] Failed to find ${type || 'file'} for ${name || 'unknown'}. Root: ${rootPath}`);
+                return null;
+            };
+
+            const bannerFile = findFileInFolder(parsedData.meta.banner, 'banner');
+            const bgFile = findFileInFolder(parsedData.meta.background, 'background');
+            const cdFile = findFileInFolder(parsedData.meta.cdtitle, 'cdtitle');
+            let audioFile = findFileInFolder(parsedData.meta.music);
+
+            // Heuristic for audio if not found explicitly
+            if (!audioFile) {
+                // Look for likely audio files in the same folder
+                const extensions = ['.ogg', '.mp3', '.wav'];
+                audioFile = files.find(f => {
+                    const fPath = f.webkitRelativePath || f.name;
+                    const fDir = fPath.substring(0, fPath.lastIndexOf('/'));
+                    const fName = fPath.split('/').pop().toLowerCase();
+                    return normalizePath(fDir) === normalizePath(rootPath) && extensions.some(ext => fName.endsWith(ext));
+                });
             }
+
+            // Helper for normalization inside the loop
+            function normalizePath(p) { return p ? p.replace(/\\/g, '/').toLowerCase() : ""; }
+
+            if (!audioFile) {
+                console.warn(`Audio not found for ${parsedData.meta.title}, skipping.`);
+                continue;
+            }
+
+            const songObj = {
+                meta: parsedData.meta,
+                charts: parsedData.charts,
+                audioBlob: audioFile,
+                bannerBlob: bannerFile,
+                bgBlob: bgFile,
+                cdTitleBlob: cdFile
+            };
+
+            // === Duplicate Check ===
+            const duplicateIndex = songLibrary.findIndex(s =>
+                s.meta.title.toLowerCase() === parsedData.meta.title.toLowerCase() &&
+                s.meta.artist.toLowerCase() === parsedData.meta.artist.toLowerCase()
+            );
+
+            if (duplicateIndex !== -1) {
+                // Auto-replace for folder imports to avoid confirm spam, or maybe smart merge. 
+                // For now, let's just replace.
+                console.log(`Replacing song: ${parsedData.meta.title}`);
+                songLibrary[duplicateIndex] = songObj;
+                selectedSongIndex = duplicateIndex;
+            } else {
+                songLibrary.push(songObj);
+                if (selectedSongIndex === -1) selectedSongIndex = songLibrary.length - 1;
+            }
+            loadedCount++;
         }
 
-        const findFile = (name) => {
-            if (!name) return null;
-            return files.find(f => f.name.toLowerCase() === name.toLowerCase());
-        };
-        const bannerFile = findFile(parsedData.meta.banner);
-        const bgFile = findFile(parsedData.meta.background);
-        const cdFile = findFile(parsedData.meta.cdtitle);
-        const audioFile = findFile(parsedData.meta.music) || files.find(f => f.type.startsWith('audio'));
-
-        if (!audioFile) throw new Error("Audio not found");
-
-        const songObj = {
-            meta: parsedData.meta,
-            charts: parsedData.charts,
-            audioBlob: audioFile,
-            bannerBlob: bannerFile,
-            bgBlob: bgFile,
-            cdTitleBlob: cdFile
-        };
-
-        if (targetIndex !== -1) {
-            songLibrary[targetIndex] = songObj;
-            selectSong(targetIndex);
+        if (loadedCount > 0) {
+            saveLibrary();
+            if (selectedSongIndex !== -1) selectSong(selectedSongIndex);
+            else renderSongList();
         } else {
-            songLibrary.push(songObj);
-            selectSong(songLibrary.length - 1);
+            alert("No valid songs imported (check audio files).");
         }
 
         setScreen('setup-panel');
         document.getElementById('loading-status').style.display = 'none';
-        saveLibrary();
+
     } catch (err) {
         console.error(err);
-        alert("Error loading song: " + err.message);
+        alert("Error loading songs: " + err.message);
         setScreen('setup-panel');
     }
 });
@@ -1526,22 +1986,50 @@ async function handleZipImport(e) {
             // Actually, handleZipImport stored files with relative path. 
             // We need to find the files inside noteObj.files
 
-            // Helper to get blob from noteObj.files case-insensitively by filename
-            const getFileBlob = (targetName) => {
-                if (!targetName) return null;
-                const lowerTarget = targetName.toLowerCase();
-                for (let fName in noteObj.files) {
-                    if (fName.toLowerCase() === lowerTarget) return noteObj.files[fName];
-                    // Also check for path segments if targetName is just file name
-                    const parts = fName.split('/');
-                    if (parts[parts.length - 1].toLowerCase() === lowerTarget) return noteObj.files[fName];
+            // Helper to get blob from noteObj.files robustly
+            const getFileBlob = (targetName, type) => {
+                const normalize = (s) => s ? s.toLowerCase() : "";
+
+                // 1. Specific Target Logic
+                if (targetName) {
+                    const lowerTarget = normalize(targetName);
+                    const targetBase = lowerTarget.substring(0, lowerTarget.lastIndexOf('.')) || lowerTarget;
+
+                    // Direct lookup (Exact)
+                    if (noteObj.files[lowerTarget]) return noteObj.files[lowerTarget];
+
+                    // Basename lookup (e.g. banner.png vs banner.bmp)
+                    for (let fName in noteObj.files) {
+                        const fLower = normalize(fName);
+                        // Check if file is in "root" (relative to cached files which are relative to song folder)
+                        // noteObj.files keys are like "banner.png" or "subfolder/img.png"
+                        // We assume assets are usually at the song root or specified path.
+
+                        // If targetName has path, matching is complex. SM usually has local paths "folder/img.png".
+                        // Robustness: match basename strictly?
+                        if (fLower.startsWith(targetBase + ".")) return noteObj.files[fName];
+                    }
+                }
+
+                // 2. Fallbacks
+                if (type) {
+                    const candidates = [];
+                    if (type === 'banner') candidates.push('banner', 'bn', 'in');
+                    if (type === 'background') candidates.push('bg', 'background', 'back');
+                    if (type === 'cdtitle') candidates.push('cdtitle', 'cd');
+
+                    for (let fName in noteObj.files) {
+                        const fLower = normalize(fName);
+                        const fBase = fLower.substring(0, fLower.lastIndexOf('.')) || fLower;
+                        if (candidates.includes(fBase)) return noteObj.files[fName];
+                    }
                 }
                 return null;
             };
 
-            noteObj.bannerBlob = getFileBlob(parsedData.meta.banner);
-            noteObj.bgBlob = getFileBlob(parsedData.meta.background);
-            noteObj.cdTitleBlob = getFileBlob(parsedData.meta.cdtitle);
+            noteObj.bannerBlob = getFileBlob(parsedData.meta.banner, 'banner');
+            noteObj.bgBlob = getFileBlob(parsedData.meta.background, 'background');
+            noteObj.cdTitleBlob = getFileBlob(parsedData.meta.cdtitle, 'cdtitle');
 
             // Audio might be implicit or explicit
             let audioBlob = getFileBlob(parsedData.meta.music);

@@ -10,6 +10,10 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+* {
+    box-sizing: border-box;
+}
+
 #bg-layer {
     position: fixed;
     top: 0;
@@ -289,19 +293,34 @@ body {
     max-width: 150px;
 }
 
+/* Main Info Row (Diff List + Stats) */
 .ss-content-row {
+    position: relative;
     display: flex;
+    justify-content: flex-end;
+    /* Align info section to right */
     gap: 20px;
-    flex: 1;
+    height: 370px;
+    /* Clamped fixed height */
+    flex: none;
 }
 
 .ss-diff-section {
-    flex: 1;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(50% - 10px);
+    /* Half width minus half gap */
+
     background: rgba(255, 255, 255, 0.03);
     border-radius: 12px;
     padding: 15px;
     border: 1px solid #333;
     overflow-y: auto;
+
+    display: flex;
+    flex-direction: column;
 }
 
 .ss-diff-section h3 {
@@ -375,8 +394,10 @@ body {
     margin-left: 10px;
 }
 
+/* Info Section (breakdown) */
 .ss-info-section {
-    width: 250px;
+    width: calc(50% - 10px);
+    /* Fixed width for right side */
     display: flex;
     flex-direction: column;
     gap: 15px;
@@ -387,6 +408,9 @@ body {
     border: 1px solid #00e5ff;
     border-radius: 12px;
     padding: 20px;
+    height: 100%;
+    /* Fill available height */
+    box-sizing: border-box;
 }
 
 .ss-calc-box h3 {
@@ -398,13 +422,15 @@ body {
 .calc-row {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
+    /* Slightly tighter */
     color: #ccc;
+    font-size: 0.9rem;
 }
 
 .calc-row.highlight {
     color: #fff;
-    font-size: 1.2rem;
+    font-size: 1.1rem;
     border-top: 1px solid #444;
     padding-top: 10px;
     font-weight: bold;
@@ -490,63 +516,64 @@ body {
     text-align: center;
     font-size: 1.5rem;
     background: #222;
-
-    /* Best Score Display */
-    #ss-best-score-display {
-        margin-top: 20px;
-        background: rgba(0, 0, 0, 0.6);
-        border: 1px solid #444;
-        border-radius: 8px;
-        padding: 15px;
-        text-align: center;
-    }
-
-    #ss-best-score-display h4 {
-        margin: 0 0 10px 0;
-        color: #888;
-        letter-spacing: 2px;
-        font-size: 0.9rem;
-    }
-
-    .ss-bs-content {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 20px;
-    }
-
-    .ss-bs-grade {
-        font-size: 3rem;
-        font-weight: 900;
-        color: #fff;
-        text-shadow: 0 0 15px currentColor;
-    }
-
-    .ss-bs-details {
-        text-align: left;
-    }
-
-    .ss-bs-score {
-        font-size: 1.5rem;
-        color: #fff;
-        font-weight: bold;
-    }
-
-    .ss-bs-acc {
-        font-size: 1rem;
-        color: #00e5ff;
-    }
-
     color: #fff;
+    border: 1px solid #444;
     border-radius: 8px;
     text-transform: uppercase;
-    font-family: 'Mochiy Pop One',
-    sans-serif;
+    font-family: 'Mochiy Pop One', sans-serif;
 }
 
 .key-inputs input:focus {
     border-color: #00e5ff;
     outline: none;
+}
+
+/* Best Score Display */
+#ss-best-score-display {
+    margin-top: 15px;
+    /* Trimmed 20px from 35px */
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 0 15px 15px 15px;
+    /* Shrunk height by removing top padding (15px) */
+    text-align: center;
+}
+
+#ss-best-score-display h4 {
+    margin: 0 0 10px 0;
+    color: #888;
+    letter-spacing: 2px;
+    font-size: 0.9rem;
+}
+
+.ss-bs-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+}
+
+.ss-bs-grade {
+    font-size: 3rem;
+    font-weight: 900;
+    color: #fff;
+    text-shadow: 0 0 15px currentColor;
+}
+
+.ss-bs-details {
+    text-align: left;
+}
+
+.ss-bs-score {
+    font-size: 1.5rem;
+    color: #fff;
+    font-weight: bold;
+}
+
+.ss-bs-acc {
+    font-size: 1rem;
+    color: #00e5ff;
 }
 
 .close-btn {
@@ -565,6 +592,141 @@ body {
 .close-btn:hover {
     box-shadow: 0 0 15px #00e5ff;
 }
+
+/* --- Action Row (Start + Setup) --- */
+.ss-action-row {
+    margin-top: auto;
+    display: flex;
+    gap: 15px;
+    width: 100%;
+}
+
+.ss-btn-secondary {
+    padding: 20px;
+    background: #333;
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: bold;
+    border: 2px solid #555;
+    border-radius: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: 0.2s;
+    text-transform: uppercase;
+}
+
+.ss-btn-secondary:hover {
+    background: #444;
+    border-color: #777;
+    transform: translateY(-2px);
+}
+
+.ss-start-btn {
+    flex: 2;
+    /* Main button takes more space */
+    padding: 20px;
+    background: #00e5ff;
+    color: #000;
+    font-size: 1.5rem;
+    font-weight: 900;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+/* ... existing hover styles for start btn ... */
+
+/* --- Modifiers Panel --- */
+.modifiers-panel {
+    width: 500px;
+    max-width: 90%;
+    background: rgba(20, 20, 20, 0.95);
+    border: 2px solid #00e5ff;
+    box-shadow: 0 0 50px rgba(0, 229, 255, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.mod-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #333;
+}
+
+.mod-group label {
+    color: #00e5ff;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.mod-control {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: #000;
+    padding: 10px;
+    border-radius: 8px;
+    justify-content: center;
+}
+
+.mod-control button {
+    width: 40px;
+    height: 40px;
+    background: #333;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.mod-control button:hover {
+    background: #555;
+}
+
+.mod-control span {
+    font-size: 1.5rem;
+    font-weight: bold;
+    min-width: 80px;
+    text-align: center;
+}
+
+.mod-toggles {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.mod-toggle-btn {
+    flex: 1;
+    padding: 10px;
+    background: #111;
+    border: 1px solid #333;
+    color: #999;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.mod-toggle-btn.active {
+    background: #00e5ff;
+    color: #000;
+    border-color: #00e5ff;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+}
+
+/* Start Button Overwrite (to remove width:100% from previous css) */
+/* .ss-start-btn was previously defined with width: 100%. Check context. */
 
 /* --- GAMEPLAY & HUD --- */
 #gameCanvas {
@@ -627,6 +789,65 @@ body {
     display: flex;
     justify-content: space-between;
     width: 140px;
+}
+
+/* Center Overlay */
+.hud-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 400px;
+    height: 400px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.hud-acc-box {
+    text-align: center;
+    margin-bottom: 20px;
+    transform: translateY(-120px);
+}
+
+#accuracy {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #fff;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+#live-grade {
+    position: absolute;
+    left: 20px;
+    bottom: 280px;
+    font-size: 5rem;
+    font-weight: 900;
+    color: #ffe600;
+    text-shadow: 0 0 20px rgba(255, 230, 0, 0.5);
+}
+
+#combo {
+    font-size: 5rem;
+    font-weight: 900;
+    color: #fff;
+    line-height: 1;
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5), 0 0 20px rgba(0, 229, 255, 0.3);
+    margin: 10px 0;
+}
+
+#judgment {
+    font-size: 3.5rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
 }
 
 /* Right Panel: NPS & Life */
@@ -704,18 +925,7 @@ body {
     text-align: center;
 }
 
-/* Center Overlay */
-.hud-center {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 400px;
-    pointer-events: none;
-}
+
 
 .hud-acc-box {
     text-align: center;
@@ -1398,51 +1608,268 @@ body {
     font-family: 'Mochiy Pop One', sans-serif;
 }
 
-.ss-bs-score {
-    font-size: 1.2rem;
-    color: #fff;
-    font-weight: bold;
-    margin-top: 5px;
-    opacity: 0.9;
+#ss-best-score-display {
+    margin-top: 20px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 15px;
 }
 
-/* Col 2: Info (SSR & Clear - Next to Grade) */
-.ss-bs-col-info {
+#ss-best-score-display h4 {
+    margin: 0 0 10px 0;
+    color: #888;
+    letter-spacing: 2px;
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.ss-bs-content {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+/* Best Score Display 3-Row Layout */
+.ss-bs-content {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 5px;
-    min-width: 80px;
+    gap: 8px;
+    width: 100%;
 }
 
-.ss-bs-ssr {
+.ss-bs-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+/* Row 1: Grade & Meta */
+.ss-bs-grade {
+    font-size: 3.5rem;
+    font-weight: 900;
     color: #fff;
-    font-weight: bold;
-    font-size: 1.4rem;
+    text-shadow: 0 0 15px currentColor;
+    line-height: 1;
+}
+
+.ss-bs-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
 }
 
 .ss-bs-clear {
     color: #ffe600;
     font-weight: 900;
-    letter-spacing: 1px;
     font-size: 1.1rem;
     text-shadow: 0 0 5px rgba(255, 230, 0, 0.5);
+}
+
+.ss-bs-ssr {
+    color: #fff;
+    font-weight: bold;
+    font-size: 1rem;
+    opacity: 0.8;
+}
+
+/* Row 2: Score & Acc */
+.ss-bs-score {
+    color: #fff;
+    font-weight: bold;
+    font-size: 1.5rem;
+    letter-spacing: 1px;
 }
 
 .ss-bs-acc {
     color: #00e5ff;
     font-weight: bold;
-    font-size: 0.9rem;
-    opacity: 0.8;
+    font-size: 1rem;
 }
 
-/* Col 3: Single Line Judge Row */
-.ss-bs-col-judge {
+/* Row 3: Judgments */
+.ss-bs-judges {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
     gap: 15px;
-    /* Spaced out numbers */
+    margin-top: 5px;
+    width: 100%;
+    justify-content: flex-start;
+}
+
+/* --- PAUSE MENU --- */
+#pause-menu {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(5px);
+}
+
+.pause-wrapper {
+    width: 600px;
+    background: rgba(10, 10, 10, 0.95);
+    border: 2px solid #555;
+    border-radius: 16px;
+    padding: 30px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.9);
+}
+
+.pause-header {
+    text-align: center;
+    border-bottom: 1px solid #333;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+    width: 100%;
+}
+
+.pause-header h2 {
+    margin: 0 0 10px 0;
+    font-size: 3rem;
+    color: #fff;
+    letter-spacing: 5px;
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+}
+
+.pause-song-info h3 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: #00e5ff;
+}
+
+.pause-song-info h4 {
+    margin: 5px 0 0 0;
+    font-size: 1rem;
+    color: #aaa;
+}
+
+.pause-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    width: 100%;
+    margin-bottom: 30px;
+}
+
+.pause-stat-box {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 15px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 1px solid #333;
+}
+
+.p-label {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 5px;
+    letter-spacing: 1px;
+}
+
+.p-value {
+    font-size: 1.5rem;
+    color: #fff;
+    font-weight: bold;
+}
+
+.p-mini-judges {
+    display: flex;
+    gap: 8px;
+    font-size: 0.8rem;
+}
+
+.p-mini-judge-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.p-mini-judge-val {
+    font-weight: bold;
+}
+
+.judge-marvelous {
+    color: #a3f7ff;
+}
+
+.judge-perfect {
+    color: #ffe600;
+}
+
+.judge-great {
+    color: #44ff4b;
+}
+
+.judge-good {
+    color: #0099ff;
+}
+
+.judge-bad {
+    color: #aa00ff;
+}
+
+.judge-miss {
+    color: #ff3333;
+}
+
+.pause-actions {
+    display: flex;
+    gap: 20px;
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.pause-btn {
     flex: 1;
+    padding: 15px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    text-transform: uppercase;
+    transition: 0.2s;
+}
+
+.pause-btn.resume {
+    background: #00e5ff;
+    color: #000;
+}
+
+.pause-btn.resume:hover {
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.4);
+    transform: translateY(-2px);
+}
+
+.pause-btn.quit {
+    background: #ff3333;
+    color: #fff;
+}
+
+.pause-btn.quit:hover {
+    box-shadow: 0 0 20px rgba(255, 51, 51, 0.4);
+    transform: translateY(-2px);
+}
+
+.pause-footer {
+    width: 100%;
+    text-align: center;
+    border-top: 1px solid #333;
+    padding-top: 15px;
+    font-size: 0.9rem;
+    color: #666;
 }
