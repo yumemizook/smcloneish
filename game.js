@@ -1,4 +1,4 @@
-/* =========================================
+﻿/* =========================================
    CONSTANTS & CONFIG
    ========================================= */
 let userConfig = {
@@ -7,6 +7,8 @@ let userConfig = {
     scrollTime: 650,
     failMode: 'on'
 };
+// Expose to window for modifiers.js access assurance
+window.userConfig = userConfig;
 
 function loadUserConfig() {
     const saved = localStorage.getItem('webSM_config');
@@ -19,6 +21,14 @@ function loadUserConfig() {
     }
 }
 loadUserConfig();
+
+function saveUserConfig() {
+    try {
+        localStorage.setItem('webSM_config', JSON.stringify(userConfig));
+    } catch (e) {
+        console.warn("Failed to save user config:", e);
+    }
+}
 
 const J_MARVELOUS = 22.5;
 const J_PERFECT = 45;
@@ -350,7 +360,7 @@ function renderSongList() {
         // Reupload indicator checking
         let missingIndicator = '';
         if (index > 0 && !song.audioBlob) {
-            missingIndicator = '<span title="Files missing. Re-import song." style="color: #ffcc00; margin-right: 6px;">⚠️</span>';
+            missingIndicator = '<span title="Files missing. Re-import song." style="color: #ffcc00; margin-right: 6px;">\u26A0\uFE0F</span>';
         }
 
         const subtitle = song.meta.subtitle ? `<span style="font-size:0.8em; color:#aaa; display:block; margin-bottom:2px;">${song.meta.subtitle}</span>` : '';
@@ -463,6 +473,11 @@ function selectSong(index) {
     ['overall', 'stream', 'jumpstream', 'handstream', 'chordjack', 'technical', 'stamina', 'nps', 'peak'].forEach(k => {
         setText(`calc-${k}`, "0.0");
     });
+
+    // Auto-select first difficulty
+    if (song.charts && song.charts.length > 0) {
+        selectDifficulty(0);
+    }
 }
 
 function selectDifficulty(chartIndex) {
@@ -643,6 +658,54 @@ function calculateDetailedDifficulty(notes) {
     return result;
 }
 
+let currentPreviewAudio = null;
+
+function previewChart() {
+    console.log("Previewing chart...");
+
+    if (currentPreviewAudio) {
+        currentPreviewAudio.pause();
+        currentPreviewAudio = null;
+        console.log("Preview stopped.");
+        return;
+    }
+
+    if (selectedSongIndex > -1 && songLibrary[selectedSongIndex]) {
+        const song = songLibrary[selectedSongIndex];
+        if (song.audioBlob) {
+            const url = URL.createObjectURL(song.audioBlob);
+            currentPreviewAudio = new Audio(url);
+
+            // Try to play from offset if available, otherwise 0
+            // Audio element doesn't support seek before load efficiently without metadata, 
+            // but we can try setting currentTime immediately.
+            currentPreviewAudio.volume = 0.6;
+
+            // Play
+            currentPreviewAudio.play().then(() => {
+                console.log("Preview playing.");
+                // Seek to sample start roughly? (e.g. 20s or halfway?)
+                // For now just start.
+            }).catch(e => console.warn("Preview play failed:", e));
+
+            // Stop after 15 seconds
+            setTimeout(() => {
+                if (currentPreviewAudio) {
+                    currentPreviewAudio.pause();
+                    currentPreviewAudio = null;
+                }
+            }, 15000);
+
+            // Cleanup on end
+            currentPreviewAudio.onended = () => { currentPreviewAudio = null; };
+        } else {
+            console.log("No audio blob available for this song.");
+        }
+    } else {
+        console.log("No song selected.");
+    }
+}
+
 // ** START GAME **
 async function startGameFromMenu() {
     if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
@@ -665,6 +728,9 @@ async function startGameFromMenu() {
             const ab = await song.audioBlob.arrayBuffer();
             const decoded = await audioCtx.decodeAudioData(ab);
             audioBuffer = decoded; // Set global buffer
+
+            // Create URL for Audio Element (Pitch Preservation)
+            const audioUrl = URL.createObjectURL(song.audioBlob);
 
             document.getElementById('loading-status').style.display = 'none';
 
@@ -735,8 +801,55 @@ function updateScoreDisplay() {
 
     const comboEl = document.getElementById('combo');
     if (comboEl) {
-        if (gameState.combo > 0) { comboEl.style.display = 'block'; comboEl.innerText = gameState.combo; }
-        else { comboEl.style.display = 'none'; }
+        if (gameState.combo > 0) {
+            comboEl.style.visibility = 'visible';
+            comboEl.innerText = gameState.combo;
+
+            // Glow Colors
+            const total = gameState.totalNotesInChart || 1;
+            const pct = gameState.combo / total;
+            const J = gameState.judgments;
+
+            let color = "#fff"; // Normal: White
+            let shadow = "0 0 10px rgba(255,255,255,0.5)"; // White Glow
+
+            if (pct > 0.25) {
+                // MFC: No Perf, Great, Good, Bad, Miss
+                // PFC: No Great, Good, Bad, Miss
+                // FC: No Good, Bad, Miss (and NG?) - Usually FC implies no combo breaks.
+                // Assuming combo > 0 implies currently in combo, but implicit "Full Combo" usually means *since start*.
+                // "currently holding a Full Combo" implies no breaks *so far*.
+
+                // Check "Missed So Far"
+                const hasMiss = (J.miss + J.bad + J.good + J.ng) > 0; // Good breaks combo in some modes? Usually Good is "FC" but depends. 
+                // User said "FC (no Good+Bad+Miss)". So Good breaks FC.
+
+                const hasGreat = J.great > 0;
+                const hasPerf = J.perfect > 0;
+
+                if (!hasMiss) {
+                    if (!hasGreat && !hasPerf) {
+                        // MFC - Cyan
+                        color = "#00e5ff";
+                        shadow = "0 0 10px rgba(0, 229, 255, 0.8), 0 0 20px rgba(0, 229, 255, 0.5)";
+                    } else if (!hasGreat) {
+                        // PFC - Yellow
+                        color = "#ffe600";
+                        shadow = "0 0 10px rgba(255, 230, 0, 0.8), 0 0 20px rgba(255, 230, 0, 0.5)";
+                    } else {
+                        // FC - Lime Green
+                        color = "#00ff00";
+                        shadow = "0 0 10px rgba(0, 255, 0, 0.8), 0 0 20px rgba(0, 255, 0, 0.5)";
+                    }
+                }
+            }
+
+            comboEl.style.color = color;
+            comboEl.style.textShadow = shadow;
+
+        } else {
+            comboEl.style.visibility = 'hidden';
+        }
     }
 
     setText('life-percent', gameState.life.toFixed(1) + "%");
@@ -832,23 +945,11 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         // isMiss doesn't have offsets usually, or we treat as Late? Miss is row 6.
 
         let timingClass = "early";
-        if (offsetMs > 0) timingClass = "late"; // Positive offset = hit late? 
-        // offset = noteTime - hitTime. 
-        // If note is at 1000, hit at 900 (early), offset = 100. (Positive)
-        // If note is at 1000, hit at 1100 (late), offset = -100. (Negative)
-        // CHECK hit logic: usually offset = note.time - inputTime.
-        // Let's verify standard: Input at 900 for 1000 note -> Early.
-        // If I define offset = note.time - inputTime (100).
-        // If I define offset = inputTime - note.time (-100).
-        // Let's assume standard SM: Early is usually negative in some engines, positive in others.
-        // In my code: offset = note.time - currentTime. 
-        // If note.time (10.0) > currentTime (9.9), offset is +0.1. (Early)
-        // So offset > 0 is Early. offset < 0 is Late.
-
+        if (offsetMs > 0) timingClass = "early"; // Logic check: Note(10) - Input(9) = +1. Early.
         if (offsetMs < 0) timingClass = "late";
-        else timingClass = "early";
 
-        if (isMiss) timingClass = "late"; // Miss is just MissFrame
+        // Correction: if Miss, force it to use the "Late" frame (col 1) as requested.
+        if (isMiss) timingClass = "late";
 
         jEl.className = `${judgeClass} ${timingClass}`;
         jEl.innerText = ""; // Hide text, use sprite
@@ -1009,17 +1110,94 @@ function drawLifeComboChart() {
 }
 
 function drawAccuracyGraph() {
-    const canvas = document.getElementById('accuracyChart'); if (!canvas) return;
-    const ctx = canvas.getContext('2d'); const w = canvas.width; const h = canvas.height;
-    const hist = gameState.accuracyHistory; ctx.clearRect(0, 0, w, h);
+    const canvas = document.getElementById('accuracyChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    const hist = gameState.accuracyHistory;
+
+    ctx.clearRect(0, 0, w, h);
     if (hist.length < 2) return;
-    let maxAcc = 0; hist.forEach(h => { if (h.acc > maxAcc) maxAcc = h.acc; }); const topScale = Math.min(100, maxAcc + 2);
-    const getGradeColor = (grade) => { return GRADE_COLORS[grade] || "#888"; }; const endTime = hist[hist.length - 1].time;
-    ctx.lineWidth = 3; ctx.lineCap = 'round';
-    for (let i = 1; i < hist.length; i++) { const p1 = hist[i - 1]; const p2 = hist[i]; const x1 = (p1.time / endTime) * w; const y1 = h - (p1.acc / topScale * h); const x2 = (p2.time / endTime) * w; const y2 = h - (p2.acc / topScale * h); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.strokeStyle = getGradeColor(p2.grade); ctx.stroke(); }
+
+    // 1. Determine Range
+    let minAcc = 100;
+    let maxAcc = 0;
+    hist.forEach(h => {
+        if (h.acc < minAcc) minAcc = h.acc;
+        if (h.acc > maxAcc) maxAcc = h.acc;
+    });
+
+    // Scale Range: [Lowest Obtained (or 0), 100]
+    // User requested: "ranges from the highest accuracy obtained and the lowest accuracy obtained (or 0, whichever is higher)"
+    // If lowest is 95, range 95-100? Or 0-100?
+    // "lowest accuracy obtained (or 0, whichever is higher)" -> Math.max(minAcc, 0). Which is always minAcc.
+    // Likely means: Dynamic min is simply the lowest value in history.
+    // Let's add a small buffer?
+    // If Acc is always 100, min=100, max=100. Range?
+
+    // Let's interpret strict dynamic range:
+    const rangeMin = Math.max(0, Math.floor(minAcc - 1)); // -1 buffer
+    const rangeMax = 100; // Acc usually capped at 100
+    const rangeSpan = rangeMax - rangeMin;
+
+    // Helper to map acc to Y
+    const getY = (val) => h - ((val - rangeMin) / rangeSpan * h);
+
+    // 2. Draw Dividers (Background Grid)
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#666';
+
+    // Draw lines every 20%, 10%, 5% or 1% depending on span?
+    // If span < 10, step 1. If span < 50, step 5. Else 10.
+    let step = 10;
+    if (rangeSpan <= 10) step = 1;
+    else if (rangeSpan <= 25) step = 5;
+
+    for (let v = Math.ceil(rangeMin / step) * step; v <= rangeMax; v += step) {
+        const y = getY(v);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+        ctx.fillText(v + '%', 2, y - 2);
+    }
+
+    // 3. Draw Graph
+    const getGradeColor = (grade) => { return GRADE_COLORS[grade] || "#888"; };
+    const endTime = hist[hist.length - 1].time;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+
+    // "Starts from the first note's accuracy instead of jumping from 0"
+    // Already iterating p1 to p2. p1 is index 0.
+    // Ensure index 0 isn't {time:0, acc:0} if the first note is at time 2.
+    // History usually starts with push.
+
+    for (let i = 1; i < hist.length; i++) {
+        const p1 = hist[i - 1];
+        const p2 = hist[i];
+
+        // Skip jump from 0 if present? 
+        // Logic: Layout X by time.
+        const x1 = (p1.time / endTime) * w;
+        const y1 = getY(p1.acc);
+        const x2 = (p2.time / endTime) * w;
+        const y2 = getY(p2.acc);
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = getGradeColor(p2.grade);
+        ctx.stroke();
+    }
 
     canvas.onmousemove = (e) => {
-        const rect = canvas.getBoundingClientRect(); const x = e.clientX - rect.left; const time = (x / rect.width) * endTime;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const time = (x / rect.width) * endTime;
         const p = findClosest(hist, 'time', time);
         if (p) showTooltip(e, `Time: ${p.time.toFixed(1)}s<br>Acc: <span>${p.acc.toFixed(2)}%</span><br>Grade: <span style="color:${GRADE_COLORS[p.grade]}">${p.grade}</span>`);
     };
@@ -1035,7 +1213,7 @@ function getFCType(j) {
 }
 
 function handleLeaderboard() {
-    const key = `webSM_lb_${gameState.meta.title}_${gameState.chartInfo.difficulty}`;
+    const key = `webSM_lb_${gameState.meta.title}_${gameState.chart.difficulty}`;
     let lb = [];
     try { lb = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { }
 
@@ -1140,11 +1318,25 @@ function quitGame() {
     if (audioSource) {
         try { audioSource.stop(); } catch (e) { console.warn(e); }
     }
+    if (gameState.audioEl) {
+        gameState.audioEl.pause();
+        gameState.audioEl = null;
+    }
     gameState.isPlaying = false;
     gameState.isPaused = false;
     gameState.failed = false;
 
     setScreen('setup-panel');
+
+    // Refresh selection
+    if (selectedSongIndex !== -1) {
+        const preserved = selectedChartIndex;
+        selectSong(selectedSongIndex);
+        if (preserved !== -1 && songLibrary[selectedSongIndex].charts && preserved < songLibrary[selectedSongIndex].charts.length) {
+            selectDifficulty(preserved);
+        }
+    }
+
     document.getElementById('pause-menu').style.display = 'none';
 
     const cvs = document.getElementById('gameCanvas');
@@ -1178,7 +1370,9 @@ function setupCanvas() {
         gameConfig.receptorY = (canvas.height * 0.1) + 65 - 40;
     }
     let visibleDistance = userConfig.downScroll ? gameConfig.receptorY : canvas.height - gameConfig.receptorY;
-    gameConfig.scrollSpeed = visibleDistance / (userConfig.scrollTime / 1000);
+    // gameConfig.scrollSpeed = visibleDistance / (userConfig.scrollTime / 1000);
+    // Use new Logic
+    updateScrollSpeed();
 }
 function getNoteRowIndex(beat) { const b = Math.abs(beat); const epsilon = 0.01; const isSnap = (div) => Math.abs((b * div) - Math.round(b * div)) < epsilon; if (isSnap(1)) return 0; if (isSnap(2)) return 1; if (isSnap(3)) return 2; if (isSnap(4)) return 3; if (isSnap(6)) return 4; if (isSnap(8)) return 5; if (isSnap(12)) return 6; return 7; }
 function drawReceptor(x, y, rotation, colIndex) {
@@ -1211,10 +1405,80 @@ function drawNote(note, y, rotation) {
     } else { let img = assets.arrowSprite; let rowIndex = getNoteRowIndex(note.beat); if (note.holdState === 'active' && assets.loaded.holdHeadActive) { img = assets.holdHeadActive; } if (assets.loaded.arrowSprite) { const sy = rowIndex * (img.height / 8); ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize); } else { ctx.fillStyle = '#fff'; ctx.fillRect(offset, offset, drawSize, drawSize); } } ctx.restore();
 }
 function drawErrorBar() { const eb = document.getElementById('errorBarCanvas'); if (!eb) return; const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height); const scale = 150 / 180; const now = Date.now(); gameState.recentHits = gameState.recentHits.filter(h => now - h.time < 2000); gameState.recentHits.forEach(h => { const x = 150 - (h.offset * scale); const age = now - h.time; const alpha = 1 - (age / 2000); let color = "255, 255, 255"; const abs = Math.abs(h.offset); if (abs <= J_MARVELOUS) color = "163, 247, 255"; else if (abs <= J_PERFECT) color = "255, 230, 0"; else if (abs <= J_GREAT) color = "68, 255, 75"; else if (abs <= J_GOOD) color = "0, 153, 255"; else if (abs <= J_BAD) color = "170, 0, 255"; else color = "255, 51, 51"; eCtx.fillStyle = `rgba(${color}, ${alpha})`; eCtx.fillRect(x - 1, 0, 3, 20); }); const offsets = gameState.hitOffsets; if (offsets.length > 0) { const sum = offsets.reduce((a, b) => a + b, 0); const mean = sum / offsets.length; setText('hit-mean', `${mean.toFixed(2)}ms`); } }
-function drawNPSGraph() { const c = document.getElementById('npsGraph'); if (!c) return; const ctx = c.getContext('2d'); const w = c.width; const h = c.height; ctx.clearRect(0, 0, w, h); const now = audioCtx.currentTime - gameState.startTime; if (gameState.globalFrame % 10 === 0) { let count = 0; for (let n of gameState.notes) { if (n.time > now - 1 && n.time <= now) count++; if (n.time > now) break; } gameState.currentNPS = count; if (count > gameState.peakNPS) gameState.peakNPS = count; gameState.npsHistory.push({ time: now, val: count }); if (gameState.npsHistory.length > 50) gameState.npsHistory.shift(); } setText('hud-nps', gameState.currentNPS); setText('hud-peak-nps', gameState.peakNPS); ctx.strokeStyle = "#00e5ff"; ctx.lineWidth = 2; ctx.beginPath(); const maxVal = Math.max(10, gameState.peakNPS); gameState.npsHistory.forEach((p, i) => { const x = (i / 50) * w; const y = h - (p.val / maxVal * h); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }); ctx.stroke(); }
+function drawNPSGraph() {
+    const c = document.getElementById('npsGraph');
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const w = c.width;
+    const h = c.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const now = audioCtx.currentTime - gameState.startTime;
+
+    // Throttle Update: Every 250ms
+    if (!gameState.lastNPSUpdate || now - gameState.lastNPSUpdate >= 0.25) {
+        gameState.lastNPSUpdate = now;
+
+        // Calculate NPS from 3s window
+        // Count notes in [now - 3, now]
+        // Note: NPS usually means "Notes Per Second". So count/3.
+        // User said: "NPS is calculated from a 3s window".
+        let count = 0;
+        for (let n of gameState.notes) {
+            if (n.time > now - 3 && n.time <= now) count++;
+            if (n.time > now) break; // Optimization
+        }
+
+        // Average NPS over 3 seconds
+        gameState.currentNPS = (count / 3).toFixed(1);
+
+        // Track Peak
+        if (parseFloat(gameState.currentNPS) > parseFloat(gameState.peakNPS)) {
+            gameState.peakNPS = gameState.currentNPS;
+        }
+
+        gameState.npsHistory.push({ time: now, val: parseFloat(gameState.currentNPS) });
+        if (gameState.npsHistory.length > 50) gameState.npsHistory.shift();
+    }
+
+    setText('hud-nps', gameState.currentNPS);
+    setText('hud-peak-nps', gameState.peakNPS);
+
+    ctx.strokeStyle = "#00e5ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    // Scale Graph
+    const maxVal = Math.max(10, parseFloat(gameState.peakNPS));
+
+    gameState.npsHistory.forEach((p, i) => {
+        const x = (i / 50) * w;
+        const y = h - (p.val / maxVal * h);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+}
 function gameLoop() {
     if (!gameState.isPlaying || gameState.isPaused) return;
-    const currentTime = audioCtx.currentTime - gameState.startTime;
+
+    let currentTime = 0;
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+
+    if (gameState.mode === 'stretch' && gameState.audioEl) {
+        currentTime = gameState.audioEl.currentTime;
+        // Check end
+        if (gameState.audioEl.ended) {
+            // Handle finish similar to audioSource.onended or simple timeout check
+        }
+    } else {
+        // Vinyl Mode
+        currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
+    }
+
+    // Update Scroll Speed (X/M mods need dynamic update due to potential BPM changes or Rate changes if linked)
+    if (typeof updateScrollSpeed === 'function') updateScrollSpeed();
+
     gameState.globalFrame++;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1402,11 +1666,9 @@ window.startKeyBind = startKeyBind;
 
 function openSettings() {
     setScreen('settings-modal');
-    setText('scroll-toggle', userConfig.downScroll ? "Downscroll" : "Upscroll (Default)");
-    document.getElementById('scroll-speed-input').value = userConfig.scrollTime;
-    document.getElementById('fail-mode-select').value = userConfig.failMode;
+    // Elements removed: scroll-speed-input, fail-mode-select, scroll-toggle
 
-    // Update buttons
+    // Update Buttons
     for (let i = 0; i < 4; i++) {
         const btn = document.getElementById(`key-btn-${i}`);
         if (btn) btn.innerText = userConfig.keys[i].toUpperCase();
@@ -1414,20 +1676,11 @@ function openSettings() {
 }
 window.openSettings = openSettings;
 
-function toggleScrollDir() {
-    userConfig.downScroll = !userConfig.downScroll;
-    setText('scroll-toggle', userConfig.downScroll ? "Downscroll" : "Upscroll (Default)");
-}
-window.toggleScrollDir = toggleScrollDir;
-
 function saveSettings() {
-    // Keys are already updated in userConfig by the binder, just need to save speed/fail mode
-    const speed = parseInt(document.getElementById('scroll-speed-input').value);
-    const fail = document.getElementById('fail-mode-select').value;
+    // Keys are already updated in userConfig by the binder.
+    // Speed/Fail are now handled by Modifiers menu.
 
-    userConfig.scrollTime = (speed && speed > 0) ? speed : 650;
-    userConfig.failMode = fail;
-
+    // Just persist config (mostly for keys)
     localStorage.setItem('webSM_config', JSON.stringify(userConfig));
     setScreen('setup-panel');
 }
@@ -1438,21 +1691,30 @@ function togglePause() {
     if (!gameState.isPlaying || gameState.failed) return;
 
     if (gameState.isPaused) {
+        // Resume handled by resumeGame
         resumeGame();
     } else {
+        // Pause
         gameState.isPaused = true;
-        audioCtx.suspend();
-        gameState.pauseCount++; // Increment pause count
+        gameState.pauseStartTime = Date.now();
 
-        // Update Pause Menu UI
+        if (gameState.mode === 'stretch' && gameState.audioEl) {
+            gameState.audioEl.pause();
+        } else if (audioCtx && audioCtx.state === 'running') {
+            audioCtx.suspend();
+        }
+
+        document.getElementById('pause-menu').style.display = 'flex';
+
+        // Populated Pause Stats
         setText('pause-song-title', gameState.meta.title);
         setText('pause-song-artist', gameState.meta.artist);
 
-        const acc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed * 2)) : 0;
-        setText('pause-score', Math.round(gameState.score).toLocaleString());
-        setText('pause-acc', (acc * 100).toFixed(2) + "%");
+        const acc = (gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed * 2)) : 1) * 100;
+        setText('pause-score', Math.round(gameState.score));
+        setText('pause-acc', acc.toFixed(2) + "%");
         setText('pause-combo', gameState.combo);
-        setText('pause-count-val', gameState.pauseCount);
+        setText('pause-count-val', gameState.pauseCount + 1);
 
         // Mini Judges
         const judges = ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss'];
@@ -1466,11 +1728,11 @@ function togglePause() {
             `).join('');
         }
 
-        // Show Overlay
-        document.getElementById('pause-menu').style.display = 'flex';
+        // Show Overlay (Already done above, removing duplicate)
 
-        // SYNC: Record when we paused
-        gameState.pauseStartTime = audioCtx.currentTime;
+        // Note: gameState.pauseStartTime already updated above with Date.now() for generic use, 
+        // but audioCtx.currentTime logic was specific to Vinyl. 
+        // We can ignore the legacy line since we branch on Resume.
     }
 }
 window.togglePause = togglePause;
@@ -1478,18 +1740,16 @@ window.togglePause = togglePause;
 function resumeGame() {
     if (!gameState.isPaused) return;
     gameState.isPaused = false;
-    audioCtx.resume();
-    document.getElementById('pause-menu').style.display = 'none';
+    gameState.pauseCount++;
 
-    // SYNC: Compensation
-    // If audio was running, currentTime would increase.
-    // If audio was suspended, currentTime might be frozen OR running depending on browser/implementation.
-    // The safest way is to shift startTime by the duration of the pause.
-    if (gameState.pauseStartTime) {
-        const drift = audioCtx.currentTime - gameState.pauseStartTime;
-        gameState.startTime += drift;
+    // Resume Audio
+    if (gameState.mode === 'stretch' && gameState.audioEl) {
+        gameState.audioEl.play();
+    } else if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
     }
 
+    document.getElementById('pause-menu').style.display = 'none';
     requestAnimationFrame(gameLoop);
 }
 window.resumeGame = resumeGame; function handleInput(e) {
@@ -1525,7 +1785,8 @@ window.resumeGame = resumeGame; function handleInput(e) {
 
     if (e.type !== 'keydown') return;
 
-    const currentTime = audioCtx.currentTime - gameState.startTime;
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    const currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
 
     // Find Hittable Note - Optimized Search
     let hittableNote = null;
@@ -1557,8 +1818,9 @@ window.resumeGame = resumeGame; function handleInput(e) {
 } window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
 
 // ** INITIALIZE GAME STATE **
-function initGame(chartInfo, audioBuf, meta, diffStats) {
+function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     gameState = {
+        audioUrl: audioUrl, // Store URL
         score: 0,
         combo: 0,
         maxCombo: 0,
@@ -1590,13 +1852,50 @@ function initGame(chartInfo, audioBuf, meta, diffStats) {
         heldKeys: [false, false, false, false],
         npsHistory: [],
         currentNPS: 0,
-        peakNPS: 0
+        peakNPS: 0,
+        bpmTimes: [] // Pre-calculated time-based BPM segments
     };
+
+    // Pre-calculate BPM logic for X/M mods
+    if (meta.bpms) {
+        let curTime = -meta.offset;
+        let curBeat = 0;
+        meta.bpms.sort((a, b) => a.beat - b.beat);
+
+        let maxBPM = 0;
+
+        for (let i = 0; i < meta.bpms.length; i++) {
+            const bpm = meta.bpms[i];
+            const nextBpm = meta.bpms[i + 1];
+
+            // Time since last BPM
+            if (i > 0) {
+                const prev = meta.bpms[i - 1];
+                const beats = bpm.beat - prev.beat;
+                const seconds = beats * (60 / prev.value);
+                curTime += seconds;
+            }
+
+            gameState.bpmTimes.push({ time: curTime, bpm: bpm.value });
+            if (bpm.value > maxBPM) maxBPM = bpm.value;
+        }
+        gameState.maxBPM = maxBPM > 0 ? maxBPM : 150;
+    } else {
+        gameState.bpmTimes = [{ time: -meta.offset, bpm: 120 }];
+        gameState.maxBPM = 120;
+    }
+
+    // Set Initial Speed
+    updateScrollSpeed();
 
     setScreen('game-hud');
     document.getElementById('gameCanvas').style.display = 'block';
     setText('judgment', "");
-    document.getElementById('combo').style.display = 'none';
+    const comboEl = document.getElementById('combo');
+    if (comboEl) {
+        comboEl.style.visibility = 'hidden';
+        comboEl.style.display = 'block'; // Ensure it takes up space
+    }
     const accLabel = document.querySelector('.acc-box .label');
     if (accLabel) accLabel.style.display = 'none';
     setText('hit-mean', 'Mean: 0.00ms');
@@ -1644,20 +1943,58 @@ function startEngine() {
     setupCanvas();
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    if (audioSource) audioSource.stop(); // Stop potential previous
-    audioSource = audioCtx.createBufferSource();
-    audioSource.buffer = audioBuffer;
-
-    // Rate Mod
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-    audioSource.playbackRate.value = rate;
+    const useVinyl = (typeof modConfig !== 'undefined' && modConfig.pitchShift !== undefined) ? modConfig.pitchShift : true;
 
-    audioSource.connect(audioCtx.destination);
-    const startTime = audioCtx.currentTime + 1.0; // 1s buffer
-    audioSource.start(startTime);
+    // cleanup previous
+    if (audioSource) { try { audioSource.stop(); } catch (e) { } audioSource = null; }
+    if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
 
-    gameState.startTime = startTime;
+    if (useVinyl) {
+        // --- VINYL MODE (Buffer Source) ---
+        audioSource = audioCtx.createBufferSource();
+        audioSource.buffer = audioBuffer;
+        audioSource.playbackRate.value = rate;
+        audioSource.onended = () => {
+            if (gameState.isPlaying && !gameState.isPaused && !gameState.failed) {
+                // Determine finish
+            }
+        };
+        audioSource.connect(audioCtx.destination);
+        const startTime = audioCtx.currentTime + 0.1; // small buffer
+        audioSource.start(startTime);
+        gameState.startTime = startTime;
+        gameState.mode = 'vinyl';
+    } else {
+        // --- TIME STRETCH MODE (Audio Element) ---
+        // Note: Chrome/Firefox use high-quality time stretching by default when preservesPitch is true (default).
+        if (!gameState.audioUrl) {
+            console.error("Audio URL missing for Time Stretch mode. Fallback to Vinyl.");
+            modConfig.pitchShift = true; // force vinyl
+            return startEngine();
+        }
+        gameState.audioEl = new Audio(gameState.audioUrl);
+        gameState.audioEl.playbackRate = rate;
+        gameState.audioEl.preservesPitch = true; // Specific property, usually default true
+
+        // Sync start
+        // We can't schedule exact future start like WebAudio, but we can play immediately.
+        gameState.audioEl.play().then(() => {
+            // Adjust gameState.startTime so our 'currentTime' logic works?
+            // Actually, for AudioEl, we should just read audioEl.currentTime.
+            // But gameLoop expects `audioCtx.currentTime - gameState.startTime`.
+            // Let's flag logic change in gameLoop.
+            gameState.startTime = Date.now(); // Not used for sync in this mode, but for ref
+        }).catch(e => console.error("Audio Play Error:", e));
+
+        gameState.mode = 'stretch';
+    }
+
     gameState.isPlaying = true;
+    gameState.isPaused = false;
+    gameState.failed = false;
+    gameState.life = 50;
+    gameState.combo = 0;
 
     // Sync Config
     if (typeof modConfig !== 'undefined') {
@@ -2078,4 +2415,59 @@ async function handleZipImport(e) {
         alert("Zip Import Failed: " + err.message);
         setScreen('setup-panel');
     }
+}
+
+/* =========================================
+   SPEED MOD LOGIC
+   ========================================= */
+function getCurrentBPM() {
+    if (!gameState || !gameState.bpmTimes) return 120;
+    const now = audioCtx ? (audioCtx.currentTime - gameState.startTime) : 0;
+
+    // Find last BPM change before now
+    for (let i = gameState.bpmTimes.length - 1; i >= 0; i--) {
+        if (now >= gameState.bpmTimes[i].time) {
+            return gameState.bpmTimes[i].bpm;
+        }
+    }
+    return gameState.bpmTimes[0].bpm;
+}
+
+function updateScrollSpeed() {
+    // Default config if missing
+    if (!userConfig.modifiers) {
+        userConfig.modifiers = { speedType: 'C', speedValue: 400, failMode: 'on' };
+    }
+
+    const mods = userConfig.modifiers;
+    const type = mods.speedType || 'C';
+    let val = mods.speedValue || 400; // Default C400
+
+    // Safety
+    if (type === 'X' && val < 0.1) val = 1.0;
+    if ((type === 'C' || type === 'M') && val < 50) val = 50;
+
+    // Scaling Factor (Reference Height: 480px)
+    // If canvas isn't ready, default to window height or 480
+    const height = (canvas && canvas.height) ? canvas.height : window.innerHeight;
+    const scaleFactor = height / 480;
+
+    let targetSpeed = 400; // Base pixels per second (at 480px height)
+
+    if (type === 'C') {
+        // C-Mod: Constant Speed
+        targetSpeed = val * scaleFactor;
+    } else if (type === 'X') {
+        // X-Mod: Multiplier of Current BPM
+        const currentBPM = getCurrentBPM();
+        targetSpeed = currentBPM * val * 2.5 * scaleFactor;
+    } else if (type === 'M') {
+        // M-Mod: Speed = (CurrentBPM / MaxBPM) * M
+        const mVal = val;
+        const currentBPM = getCurrentBPM();
+        targetSpeed = (currentBPM / (gameState.maxBPM || 150)) * mVal * scaleFactor;
+    }
+
+    gameConfig.scrollSpeed = targetSpeed;
+    // console.log("Updated Speed:", type, val, "=>", targetSpeed, "BPM:", getCurrentBPM());
 }

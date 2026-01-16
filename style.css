@@ -640,16 +640,40 @@ body {
 
 /* ... existing hover styles for start btn ... */
 
+/* Modifiers Modal Wrapper override */
+#modifiers-modal.modal-overlay {
+    background: transparent;
+    /* Remove dark backdrop if we want just the menu */
+    pointer-events: none;
+    /* Allow clicks through the empty space */
+}
+
+#modifiers-modal .modifiers-panel {
+    pointer-events: auto;
+    /* Re-enable clicks on the panel */
+}
+
 /* --- Modifiers Panel --- */
 .modifiers-panel {
-    width: 500px;
+    /* Removed width constraints to allow fitting content, or keep fixed width?
+       Let's keep width but handle positioning via JS.
+       Actually, if we want it "absolute on the left side", we should make it position: fixed
+       so it overlays everything easily without z-index fighting from parents. */
+    width: 350px;
+    /* Reduced width for better fit? Or keep 500px? 500 might be too wide for "left side". Let's try 350. */
     max-width: 90%;
-    background: rgba(20, 20, 20, 0.95);
+    background: rgba(20, 20, 20, 0.98);
     border: 2px solid #00e5ff;
     box-shadow: 0 0 50px rgba(0, 229, 255, 0.2);
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 15px;
+
+    position: fixed;
+    /* Changed from default static in flex container */
+    z-index: 1000;
+    /* High z-index */
+    /* top/left set by JS */
 }
 
 .mod-group {
@@ -1099,6 +1123,63 @@ body {
 .judge-miss {
     color: #ff3333;
     text-shadow: 0 0 15px #ff0000;
+}
+
+/* Judgment Sprite Logic */
+#judgment {
+    width: 340px;
+    height: 85px;
+    /* 680x170 scaled by 0.5 */
+    background-image: url("Neo Sekai 2x6 (doubleres).png");
+    background-size: 200% 600%;
+    background-repeat: no-repeat;
+    margin: 0 auto 20px auto;
+    /* Clear text styles just in case, though JS clears text */
+    color: transparent;
+    text-shadow: none;
+    font-size: 0;
+    /* Hide any fallback text */
+    opacity: 0;
+    /* Hidden by default at start */
+}
+
+/* Show when a judgment class is present */
+#judgment[class*="judge-"] {
+    opacity: 1;
+}
+
+/* Timing Columns */
+#judgment.early {
+    background-position-x: 0%;
+}
+
+#judgment.late {
+    background-position-x: 100%;
+}
+
+/* Judgment Rows */
+#judgment.judge-marvelous {
+    background-position-y: 0%;
+}
+
+#judgment.judge-perfect {
+    background-position-y: 20%;
+}
+
+#judgment.judge-great {
+    background-position-y: 40%;
+}
+
+#judgment.judge-good {
+    background-position-y: 60%;
+}
+
+#judgment.judge-bad {
+    background-position-y: 80%;
+}
+
+#judgment.judge-miss {
+    background-position-y: 100%;
 }
 
 /* Settings Modal */
@@ -1872,4 +1953,19 @@ body {
     padding-top: 15px;
     font-size: 0.9rem;
     color: #666;
+}
+
+/* Modal Overlay Fixed Position */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 250;
+    backdrop-filter: blur(5px);
 }

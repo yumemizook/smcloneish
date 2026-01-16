@@ -9,7 +9,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <script src="modifiers.js" defer></script>
 </head>
 
 <body>
@@ -94,13 +93,13 @@
                                         <span class="ss-bs-ssr" id="bs-ssr">0.00</span>
                                     </div>
                                 </div>
-                                
+
                                 <!-- Row 2: Score | Accuracy -->
                                 <div class="ss-bs-row row-2">
                                     <div class="ss-bs-score" id="bs-score">000,000</div>
                                     <div class="ss-bs-acc" id="bs-acc">0.00%</div>
                                 </div>
-                                
+
                                 <!-- Row 3: Judgments -->
                                 <div class="ss-bs-row row-3">
                                     <div class="ss-bs-judges" id="bs-judge-grid">
@@ -110,9 +109,11 @@
                             </div>
                         </div>
                         <div class="ss-action-row">
-                            <button class="ss-btn-secondary" onclick="openModifiers()">🛠️ Modifiers</button>
+                            <button id="btn-modifiers" class="ss-btn-secondary" onclick="openModifiers()">🛠️
+                                Modifiers</button>
                             <button class="ss-btn-secondary" onclick="previewChart()">▶ Preview</button>
-                            <button id="start-btn" class="ss-start-btn" onclick="startGameFromMenu()" disabled>START GAME</button>
+                            <button id="start-btn" class="ss-start-btn" onclick="startGameFromMenu()" disabled>START
+                                GAME</button>
                         </div>
                     </div>
                 </div>
@@ -122,39 +123,77 @@
             <div id="modifiers-modal" class="modal-overlay" style="display:none;">
                 <div class="modal-content modifiers-panel">
                     <h2>Game Modifiers</h2>
-                    
-                    <div class="mod-group">
-                        <label>Rate (Speed)</label>
-                        <div class="mod-control">
-                            <button onclick="changeRate(-0.05)">-</button>
-                            <span id="mod-rate-display">1.00x</span>
-                            <button onclick="changeRate(0.05)">+</button>
+
+                    <div class="mod-group" id="mod-speed-type">
+                        <label>Speed Mod Type</label>
+                        <div class="mod-toggles">
+                            <button class="mod-toggle-btn" data-val="X"
+                                onclick="setModifier('speedType','X')">X-Mod</button>
+                            <button class="mod-toggle-btn" data-val="C"
+                                onclick="setModifier('speedType','C')">C-Mod</button>
+                            <button class="mod-toggle-btn" data-val="M"
+                                onclick="setModifier('speedType','M')">M-Mod</button>
                         </div>
                     </div>
 
                     <div class="mod-group">
-                        <label>Scroll Speed</label>
+                        <label>Speed Value</label>
                         <div class="mod-control">
-                            <button onclick="changeScroll(-10)">-</button>
-                            <span id="mod-scroll-display">650</span>
-                            <button onclick="changeScroll(10)">+</button>
+                            <button onclick="changeSpeedVal(-1)">-</button>
+                            <span id="mod-speed-val-display">C400</span>
+                            <button onclick="changeSpeedVal(1)">+</button>
                         </div>
                     </div>
 
                     <div class="mod-group" id="mod-scroll-dir">
                         <label>Scroll Direction</label>
                         <div class="mod-toggles">
-                            <button class="mod-toggle-btn" data-val="up" onclick="setModifier('direction','up')">Upscroll</button>
-                            <button class="mod-toggle-btn" data-val="down" onclick="setModifier('direction','down')">Downscroll</button>
+                            <button class="mod-toggle-btn" data-val="up"
+                                onclick="setModifier('direction','up')">Upscroll</button>
+                            <button class="mod-toggle-btn" data-val="down"
+                                onclick="setModifier('direction','down')">Downscroll</button>
+                        </div>
+                    </div>
+
+                    <div class="mod-group" id="mod-fail">
+                        <label>Failure Mode</label>
+                        <div class="mod-toggles">
+                            <button class="mod-toggle-btn" data-val="on" onclick="setModifier('fail','on')">On</button>
+                            <button class="mod-toggle-btn" data-val="off"
+                                onclick="setModifier('fail','off')">Off</button>
+                            <button class="mod-toggle-btn" data-val="end"
+                                onclick="setModifier('fail','end')">End</button>
                         </div>
                     </div>
 
                     <div class="mod-group" id="mod-turn">
                         <label>Pattern</label>
                         <div class="mod-toggles">
-                            <button class="mod-toggle-btn" data-val="none" onclick="setModifier('turn','none')">None</button>
-                            <button class="mod-toggle-btn" data-val="mirror" onclick="setModifier('turn','mirror')">Mirror</button>
-                            <button class="mod-toggle-btn" data-val="shuffle" onclick="setModifier('turn','shuffle')">Shuffle</button>
+                            <button class="mod-toggle-btn" data-val="none"
+                                onclick="setModifier('turn','none')">None</button>
+                            <button class="mod-toggle-btn" data-val="mirror"
+                                onclick="setModifier('turn','mirror')">Mirror</button>
+                            <button class="mod-toggle-btn" data-val="shuffle"
+                                onclick="setModifier('turn','shuffle')">Shuffle</button>
+                        </div>
+                    </div>
+
+                    <div class="mod-group" id="mod-rate">
+                        <label>Music Rate</label>
+                        <div class="mod-val-control">
+                            <button class="mod-val-btn" onclick="changeRateVal(-1)">-</button>
+                            <span id="mod-rate-display">1.0x</span>
+                            <button class="mod-val-btn" onclick="changeRateVal(1)">+</button>
+                        </div>
+                    </div>
+
+                    <div class="mod-group" id="mod-pitch">
+                        <label>Pitch Shift</label>
+                        <div class="mod-toggles">
+                            <button class="mod-toggle-btn active" data-val="on"
+                                onclick="setModifier('pitchShift','on')">On</button>
+                            <button class="mod-toggle-btn" data-val="off"
+                                onclick="setModifier('pitchShift','off')">Off</button>
                         </div>
                     </div>
 
@@ -176,20 +215,8 @@
                 <div class="setting-group">
                     <h3>Gameplay</h3>
                     <div class="setting-row">
-                        <label>Scroll Direction</label>
-                        <button id="scroll-toggle" onclick="toggleScrollDir()">Upscroll (Default)</button>
-                    </div>
-                    <div class="setting-row">
-                        <label>Scroll Time (ms)</label>
-                        <input type="number" id="scroll-speed-input" value="650" min="100" max="2000" step="10">
-                    </div>
-                    <div class="setting-row">
-                        <label>Failure Mode</label>
-                        <select id="fail-mode-select">
-                            <option value="on">On (Standard)</option>
-                            <option value="off">Off (No Fail)</option>
-                            <option value="end">End of Song</option>
-                        </select>
+                        <!-- Redundant settings moved to modifiers -->
+                        <span style="color:#666; font-style:italic;">Use Modifiers Menu for Speed/Scroll</span>
                     </div>
                 </div>
                 <div class="setting-group">
@@ -309,7 +336,7 @@
                     <button class="pause-btn resume" id="pause-resume-btn">RESUME</button>
                     <button class="pause-btn quit" id="pause-quit-btn">QUIT</button>
                 </div>
-                
+
                 <div class="pause-footer">
                     <div class="pause-stat-row">Pauses used: <span id="pause-count-val">0</span></div>
                 </div>
@@ -405,6 +432,7 @@
     <div id="graph-tooltip"></div>
 
     <canvas id="gameCanvas"></canvas>
+    <script src="modifiers.js"></script>
     <script src="game.js"></script>
 </body>
 

@@ -3,10 +3,13 @@
    ========================================= */
 
 const modConfig = {
-    rate: 1.0,
-    scrollSpeed: 650,
-    scrollDirection: 'up', // 'up' or 'down' (mapped to screen setting)
-    turn: 'none' // 'none', 'mirror', 'shuffle', 'left', 'right'
+    speedType: 'C',    // 'X' (Multiplier), 'C' (Constant), 'M' (Max)
+    speedValue: 400,   // Value based on type (e.g. 2.0 or 400)
+    scrollDirection: 'up', // 'up' or 'down'
+    failMode: 'on',    // 'on', 'off', 'end'
+    turn: 'none',      // 'none', 'mirror', 'shuffle'
+    rate: 1.0,         // Playback Rate (0.5 - 2.0)
+    pitchShift: true   // True = Vinyl/Resample (Default), False = Preserve Pitch (Time Stretch)
 };
 
 /* =========================================
@@ -14,7 +17,28 @@ const modConfig = {
    ========================================= */
 
 function openModifiers() {
-    document.getElementById('modifiers-modal').style.display = 'flex';
+    const modal = document.getElementById('modifiers-modal');
+    modal.style.display = 'block';
+
+    const btn = document.getElementById('btn-modifiers');
+    const panel = modal.querySelector('.modifiers-panel');
+
+    if (btn && panel) {
+        const btnRect = btn.getBoundingClientRect();
+        const panelWidth = 350;
+
+        let left = btnRect.left - panelWidth - 20;
+        if (left < 10) left = 10;
+
+        panel.style.top = 'auto';
+        panel.style.bottom = (window.innerHeight - btnRect.bottom) + 'px';
+        panel.style.left = left + 'px';
+
+        modal.style.background = 'transparent';
+        modal.style.pointerEvents = 'none';
+        panel.style.pointerEvents = 'auto';
+    }
+
     updateModifiersUI();
 }
 
@@ -24,17 +48,31 @@ function closeModifiers() {
 }
 
 function updateModifiersUI() {
-    // Rate
-    document.getElementById('mod-rate-display').innerText = modConfig.rate.toFixed(2) + "x";
+    // Speed Mod Type
+    updateToggle('mod-speed-type', modConfig.speedType);
 
-    // Scroll Speed
-    document.getElementById('mod-scroll-display').innerText = modConfig.scrollSpeed;
+    // Speed Value Display
+    let valStr = modConfig.speedValue;
+    if (modConfig.speedType === 'X') valStr = modConfig.speedValue.toFixed(1) + "x";
+    else if (modConfig.speedType === 'C') valStr = "C" + Math.round(modConfig.speedValue);
+    else if (modConfig.speedType === 'M') valStr = "M" + Math.round(modConfig.speedValue);
+    document.getElementById('mod-speed-val-display').innerText = valStr;
+
+    // Fail Mode
+    updateToggle('mod-fail', modConfig.failMode);
 
     // Direction
     updateToggle('mod-scroll-dir', modConfig.scrollDirection);
 
-    // Turn (Random)
+    // Turn
     updateToggle('mod-turn', modConfig.turn);
+
+    // Rate Display
+    const rateEl = document.getElementById('mod-rate-display');
+    if (rateEl) rateEl.innerText = modConfig.rate.toFixed(2) + "x";
+
+    // Pitch Shift Toggle
+    updateToggle('mod-pitch', modConfig.pitchShift ? 'on' : 'off');
 }
 
 function updateToggle(id, val) {
@@ -42,40 +80,61 @@ function updateToggle(id, val) {
     if (!group) return;
     const btns = group.querySelectorAll('.mod-toggle-btn');
     btns.forEach(btn => {
-        if (btn.dataset.val === val) btn.classList.add('active');
+        if (btn.dataset.val === String(val)) btn.classList.add('active');
         else btn.classList.remove('active');
     });
 }
 
-function changeRate(delta) {
-    modConfig.rate = Math.round((modConfig.rate + delta) * 100) / 100;
-    if (modConfig.rate < 0.7) modConfig.rate = 0.7;
-    if (modConfig.rate > 3.0) modConfig.rate = 3.0;
+function changeSpeedVal(delta) {
+    if (modConfig.speedType === 'X') {
+        const step = 0.5; // X-mod step
+        // Assuming HTML calls changeSpeedVal(1) or changeSpeedVal(-1).
+        let change = delta > 0 ? 0.25 : -0.25;
+        modConfig.speedValue = Math.max(0.25, modConfig.speedValue + change);
+    } else {
+        // C/M Mod Step (e.g. 25 or 50)
+        let change = delta > 0 ? 25 : -25;
+        modConfig.speedValue = Math.max(50, modConfig.speedValue + change);
+    }
     updateModifiersUI();
 }
 
-function changeScroll(delta) {
-    modConfig.scrollSpeed += delta;
-    if (modConfig.scrollSpeed < 100) modConfig.scrollSpeed = 100;
-    if (modConfig.scrollSpeed > 2000) modConfig.scrollSpeed = 2000;
+function changeRateVal(delta) {
+    const step = 0.05;
+    let newRate = modConfig.rate + (delta * step);
+    // Range 0.7x - 3.0x
+    newRate = Math.max(0.7, Math.min(3.0, newRate));
+    modConfig.rate = Math.round(newRate * 100) / 100;
     updateModifiersUI();
 }
+window.changeRateVal = changeRateVal;
 
 // Global hook for toggles
 function setModifier(type, val) {
-    if (type === 'direction') modConfig.scrollDirection = val;
+    if (type === 'speedType') {
+        modConfig.speedType = val;
+        if (val === 'X') modConfig.speedValue = 2.0;
+        else if (val === 'C') modConfig.speedValue = 400;
+        else if (val === 'M') modConfig.speedValue = 400;
+    }
+    if (type === 'fail') modConfig.failMode = val;
+    if (type === 'direction') {
+        modConfig.scrollDirection = val;
+        if (typeof setupCanvas === 'function') setupCanvas();
+    }
     if (type === 'turn') modConfig.turn = val;
+    if (type === 'pitchShift') modConfig.pitchShift = (val === 'on');
     updateModifiersUI();
 }
 
 function saveModifiers() {
-    // Persist to local storage if needed, or just keep in session
     localStorage.setItem('webSM_modifiers', JSON.stringify(modConfig));
-    // Sync with gameConfig if necessary (e.g. scroll settings)
     if (typeof userConfig !== 'undefined') {
-        userConfig.scrollTime = modConfig.scrollSpeed;
+        userConfig.modifiers = { ...modConfig };
         userConfig.downScroll = (modConfig.scrollDirection === 'down');
-        saveUserConfig(); // Assume this exists in game.js or we add it
+        userConfig.failMode = modConfig.failMode;
+        if (typeof saveUserConfig === 'function') saveUserConfig();
+        if (typeof setupCanvas === 'function') setupCanvas();
     }
 }
 
@@ -85,17 +144,14 @@ function loadModifiers() {
         try {
             const parsed = JSON.parse(saved);
             Object.assign(modConfig, parsed);
+            if (!modConfig.rate) modConfig.rate = 1.0;
         } catch (e) { }
     }
-    // Sync from userConfig if it was loaded first? 
-    // Actually modifiers should probably override or sync bi-directionally.
-    // Let's assume modifiers.js loads after game.js's config
     if (typeof userConfig !== 'undefined') {
-        modConfig.scrollSpeed = userConfig.scrollTime || 650;
-        modConfig.scrollDirection = userConfig.downScroll ? 'down' : 'up';
+        userConfig.modifiers = { ...modConfig };
+        userConfig.downScroll = (modConfig.scrollDirection === 'down');
+        userConfig.failMode = modConfig.failMode;
     }
 }
 
-// Initial load
-// Use a timeout or wait for DOM? Called from index.html script probably.
 window.addEventListener('DOMContentLoaded', loadModifiers);
