@@ -16,6 +16,15 @@
     <div id="bg-layer"></div>
 
     <div id="ui-layer">
+        
+        <!-- Intro / Loading Screen -->
+        <div id="intro-screen">
+            <div id="intro-content">
+                <h1 id="intro-title">WebSM</h1>
+                <div id="intro-loading-text" class="glow-text">Now Loading...</div>
+                <div id="intro-prompt" class="blink-text" style="display:none;">PRESS ANY KEY TO START</div>
+            </div>
+        </div>
 
         <!-- Setup / Song Select -->
         <div id="setup-panel">
@@ -50,6 +59,7 @@
                                 <h2 id="ss-artist">Artist</h2>
                             </div>
                             <img id="ss-cdtitle" src="" alt="" style="display:none;">
+                            <div id="ss-rate-badge" style="display:none;">1.0x</div>
                         </div>
 
                         <div class="ss-content-row">
@@ -439,57 +449,17 @@
             <div id="failed-overlay" style="display:none;">FAILED</div>
         </div>
 
-        <!-- Pause Menu -->
-        <div id="pause-menu" style="display:none;">
-            <div class="pause-wrapper">
-                <div class="pause-header">
-                    <h2>PAUSED</h2>
-                    <div class="pause-song-info">
-                        <h3 id="pause-song-title">Song Title</h3>
-                        <h4 id="pause-song-artist">Artist</h4>
-                    </div>
-                </div>
-
-                <div class="pause-stats-grid">
-                    <div class="pause-stat-box">
-                        <span class="p-label">SCORE</span>
-                        <span class="p-value" id="pause-score">000,000</span>
-                    </div>
-                    <div class="pause-stat-box">
-                        <span class="p-label">ACCURACY</span>
-                        <span class="p-value" id="pause-acc">0.00%</span>
-                    </div>
-                    <div class="pause-stat-box">
-                        <span class="p-label">COMBO</span>
-                        <span class="p-value" id="pause-combo">0</span>
-                    </div>
-                    <div class="pause-stat-box">
-                        <span class="p-label">JUDGMENTS</span>
-                        <div class="p-mini-judges" id="pause-judges">
-                            <!-- Populated by JS -->
-                        </div>
-                    </div>
-                </div>
-
-                <div class="pause-actions">
-                    <button class="pause-btn resume" id="pause-resume-btn">RESUME</button>
-                    <button class="pause-btn quit" id="pause-quit-btn">QUIT</button>
-                </div>
-
-                <div class="pause-footer">
-                    <div class="pause-stat-row">Pauses used: <span id="pause-count-val">0</span></div>
-                </div>
-            </div>
-        </div>
+        <!-- Pause Menu was here, moved to root -->
 
         <!-- Results Screen -->
         <div id="results-screen" style="display:none;">
             <div class="res-header">
                 <img id="res-banner" src="" alt="" style="display:none;">
                 <div class="res-song-info">
-                    <h2 id="res-song-title">Song Title</h2>
-                    <h3 id="res-song-artist">Artist</h3>
+                    <h1 id="res-song-title">Title</h1>
+                    <h2 id="res-song-artist">Artist <span id="res-rate-display" style="display:none; font-size: 0.8em; color: #ffcc00; margin-left:10px;">(1.0x)</span></h2>
                 </div>
+                <div class="res-grade-box"></div>
             </div>
 
             <div class="res-main-layout">
@@ -569,6 +539,49 @@
     </div>
 
     <div id="graph-tooltip"></div>
+
+    <!-- Pause Menu -->
+    <div id="pause-menu" style="display:none;">
+        <div class="pause-wrapper">
+            <div class="pause-header">
+                <h2>PAUSED</h2>
+                <div class="pause-song-info">
+                    <h3 id="pause-song-title">Song Title</h3>
+                    <h4 id="pause-song-artist">Artist</h4>
+                </div>
+            </div>
+
+            <div class="pause-stats-grid">
+                <div class="pause-stat-box">
+                    <span class="p-label">SCORE</span>
+                    <span class="p-value" id="pause-score">000,000</span>
+                </div>
+                <div class="pause-stat-box">
+                    <span class="p-label">ACCURACY</span>
+                    <span class="p-value" id="pause-acc">0.00%</span>
+                </div>
+                <div class="pause-stat-box">
+                    <span class="p-label">COMBO</span>
+                    <span class="p-value" id="pause-combo">0</span>
+                </div>
+                <div class="pause-stat-box">
+                    <span class="p-label">JUDGMENTS</span>
+                    <div class="p-mini-judges" id="pause-judges">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="pause-actions">
+                <button class="pause-btn resume" id="pause-resume-btn">RESUME</button>
+                <button class="pause-btn quit" id="pause-quit-btn">QUIT</button>
+            </div>
+
+            <div class="pause-footer">
+                <div class="pause-stat-row">Pauses used: <span id="pause-count-val">0</span></div>
+            </div>
+        </div>
+    </div>
 
     <canvas id="gameCanvas"></canvas>
     <script src="modifiers.js"></script>

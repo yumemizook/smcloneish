@@ -209,43 +209,189 @@ function applyChartTransforms(originalNotes) {
     // 2. Inserts / Removes
     const tf = modConfig.transform;
     if (tf) {
+        // --- REMOVES ---
         if (tf.noMines) notes = notes.filter(n => n.type !== 'mine');
-        if (tf.noHolds) notes = notes.filter(n => n.type !== 'hold'); // Converts to tap? Or removes? SM removes.
+        if (tf.noHolds) notes = notes.filter(n => n.type !== 'hold');
         if (tf.noRolls) notes = notes.filter(n => n.type !== 'roll');
+
         if (tf.noHands) {
-            // Remove notes that make >2 simultaneous presses? or >1? 
-            // "No Hands" usually means max 2 arrows at once (no 3 or 4).
-            // Simplification: Group by time, if > 2, remove excess? 
-            // For now, let's skip complex "No Hands" logic and focus on singular removes.
-        }
-        if (tf.noJumps) {
-            // Remove jumps (2 simultaneous). Keep one?
-            // Group by time. If count > 1, keep only first.
+            // Keep max 2 notes per row (time)
             const timeMap = new Map();
             notes.forEach(n => {
                 if (!timeMap.has(n.time)) timeMap.set(n.time, []);
                 timeMap.get(n.time).push(n);
             });
-            const newNotes = [];
+            let newNotes = [];
+            timeMap.forEach(group => {
+                if (group.length > 2) {
+                    // Keep first 2 columns
+                    group.sort((a, b) => a.col - b.col);
+                    newNotes.push(group[0]);
+                    newNotes.push(group[1]);
+                } else {
+                    newNotes.push(...group);
+                }
+            });
+            notes = newNotes.sort((a, b) => a.time - b.time);
+        }
+
+        if (tf.noJumps) {
+            // Keep max 1 note per row
+            const timeMap = new Map();
+            notes.forEach(n => {
+                if (!timeMap.has(n.time)) timeMap.set(n.time, []);
+                timeMap.get(n.time).push(n);
+            });
+            let newNotes = [];
             timeMap.forEach(group => {
                 if (group.length > 1) {
-                    // Keep only one (e.g. lowest val col, or random)
+                    // Keep only one (e.g. lowest val col)
                     newNotes.push(group[0]);
                 } else {
                     newNotes.push(group[0]);
                 }
             });
-            notes = newNotes; // Sorted by time implicitly if map insertion order preserved (mostly yes for sorted input)
-            notes.sort((a, b) => a.time - b.time);
+            notes = newNotes.sort((a, b) => a.time - b.time);
         }
+
         if (tf.little) {
             // Keep only 4th notes (Beat % 1 === 0)
-            // Epsilon for float precision
             notes = notes.filter(n => {
                 const b = n.beat;
                 return Math.abs(b - Math.round(b)) < 0.01;
             });
         }
+
+        // --- INSERTS ---
+        const maxBeat = notes.length > 0 ? notes[notes.length - 1].beat : 0;
+
+        // Helper to find if note exists at beat/col
+        const exists = (beat, col) => notes.some(n => Math.abs(n.beat - beat) < 0.001 && (col === -1 || n.col === col));
+        const getAtBeat = (beat) => notes.filter(n => Math.abs(n.beat - beat) < 0.001);
+
+        if (tf.wide) {
+            // Convert all taps to Jumps (if not already)
+            let notesToAdd = [];
+            let snapshot = [...notes];
+            snapshot.forEach(n => {
+                if (n.type === 'tap' || n.type === 'hold') {
+                    const neighbors = getAtBeat(n.beat);
+                    if (neighbors.length < 2) {
+                        let newCol = 3 - n.col;
+                        if (!neighbors.some(x => x.col === newCol)) {
+                            notesToAdd.push({
+                                time: n.time,
+                                beat: n.beat,
+                                col: newCol,
+                                type: 'tap', // Always add tap for Wide
+                                processed: false
+                            });
+                        }
+                    }
+                }
+            });
+            notes = notes.concat(notesToAdd);
+        }
+
+        if (tf.big) {
+            // Add 8th notes between 4ths
+            let notesToAdd = [];
+            for (let b = 0; b < maxBeat; b += 1) {
+                const targetBeat = b + 0.5;
+                if (!exists(targetBeat, -1)) {
+                    let col = (b % 2 === 0) ? 1 : 2;
+                    // Interpolate time
+                    const prev = notes.filter(n => n.beat <= targetBeat).pop();
+                    const next = notes.find(n => n.beat > targetBeat);
+
+                    if (prev && next) {
+                        const ratio = (targetBeat - prev.beat) / (next.beat - prev.beat);
+                        const interpolatedTime = prev.time + (next.time - prev.time) * ratio;
+                        notesToAdd.push({ beat: targetBeat, time: interpolatedTime, col: col, type: 'tap', processed: false });
+                    }
+                }
+            }
+            notes = notes.concat(notesToAdd);
+        }
+
+        if (tf.quick) {
+            // Add 16th notes
+            let notesToAdd = [];
+            for (let b = 0; b < maxBeat; b += 0.5) {
+                const targetBeat = b + 0.25;
+                if (!exists(targetBeat, -1)) {
+                    let col = (Math.floor(b) % 2 === 0) ? 0 : 3;
+                    const prev = notes.filter(n => n.beat <= targetBeat).sort((a, b) => a.beat - b.beat).pop();
+                    const next = notes.find(n => n.beat > targetBeat);
+                    if (prev && next) {
+                        const ratio = (targetBeat - prev.beat) / (next.beat - prev.beat);
+                        const interpolatedTime = prev.time + (next.time - prev.time) * ratio;
+                        notesToAdd.push({ beat: targetBeat, time: interpolatedTime, col: col, type: 'tap', processed: false });
+                    }
+                }
+            }
+            notes = notes.concat(notesToAdd);
+        }
+
+        if (tf.skippy) {
+            // Add 16ths after 4ths
+            let notesToAdd = [];
+            notes.forEach(n => {
+                if (Math.abs(n.beat % 1) < 0.01) {
+                    const targetBeat = n.beat + 0.75;
+                    if (!exists(targetBeat, -1)) {
+                        let newCol = (n.col + 1) % 4;
+                        const next = notes.find(x => x.beat > n.beat);
+                        if (next) {
+                            const ratio = (targetBeat - n.beat) / (next.beat - n.beat);
+                            const t = n.time + (next.time - n.time) * ratio;
+                            notesToAdd.push({ beat: targetBeat, time: t, col: newCol, type: 'tap', processed: false });
+                        }
+                    }
+                }
+            });
+            notes = notes.concat(notesToAdd);
+        }
+
+        if (tf.echo) {
+            // Add a note 1/8th after every tap
+            let notesToAdd = [];
+            notes.forEach(n => {
+                if (n.type === 'tap') {
+                    const targetBeat = n.beat + 0.5;
+                    if (!exists(targetBeat, -1)) {
+                        let newCol = n.col; // Echo same col
+                        const next = notes.find(x => x.beat > n.beat);
+                        if (next) {
+                            const ratio = (targetBeat - n.beat) / (next.beat - n.beat);
+                            const t = n.time + (next.time - n.time) * ratio;
+                            notesToAdd.push({ beat: targetBeat, time: t, col: newCol, type: 'tap', processed: false });
+                        }
+                    }
+                }
+            });
+            notes = notes.concat(notesToAdd);
+        }
+
+        if (tf.stomp) {
+            // Emphasize beats with Jumps
+            let notesToAdd = [];
+            notes.forEach(n => {
+                if (Math.abs(n.beat % 1) < 0.01 && (n.type === 'tap' || n.type === 'hold')) {
+                    const neighbors = getAtBeat(n.beat);
+                    if (neighbors.length < 2) {
+                        let newCol = 3 - n.col;
+                        if (!neighbors.some(x => x.col === newCol)) {
+                            notesToAdd.push({ beat: n.beat, time: n.time, col: newCol, type: 'tap', processed: false });
+                        }
+                    }
+                }
+            });
+            notes = notes.concat(notesToAdd);
+        }
+
+        // Re-sort after inserts
+        notes.sort((a, b) => a.time - b.time);
     }
 
     // 3. Turns
@@ -418,13 +564,64 @@ function sortLibrary() {
 /* =========================================
    LIBRARY LOGIC
    ========================================= */
+/* =========================================
+   LIBRARY LOGIC
+   ========================================= */
 window.onload = async () => {
     document.getElementById('gameCanvas').style.display = 'none';
+
+    // Ensure intro screen is visible (it defaults to visible in CSS but good to be sure if we change it later)
+    const introScreen = document.getElementById('intro-screen');
+    const introLoading = document.getElementById('intro-loading-text');
+    const introPrompt = document.getElementById('intro-prompt');
+
+    if (introScreen) introScreen.style.display = 'flex';
+
     loadLibrary();
     sortLibrary();
-    renderSongList();
+    // renderSongList(); // Called after loadLocalSong? Or before? Existing code called it before.
+    // Let's keep it consistent but we might want to wait. 
+    // loadLocalSong calls renderSongList internally.
+
     await loadLocalSong();
+
+    // Initialization done.
+    if (introLoading) introLoading.style.display = 'none';
+    if (introPrompt) {
+        introPrompt.style.display = 'block';
+
+        const onStart = () => {
+            document.removeEventListener('keydown', onStart);
+            document.removeEventListener('click', onStart);
+            startApp();
+        };
+
+        document.addEventListener('keydown', onStart);
+        document.addEventListener('click', onStart);
+    } else {
+        // Fallback if elements invalid
+        startApp();
+    }
 };
+
+function startApp() {
+    const introScreen = document.getElementById('intro-screen');
+    if (introScreen) {
+        introScreen.classList.add('fade-out');
+        setTimeout(() => {
+            introScreen.style.display = 'none';
+        }, 500);
+    }
+
+    // Resume Audio Context if it exists (usually created on demand, but good practice for future)
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
+    // Add logic to show the specific screen we want first (setup-panel)
+    // setScreen('setup-panel') is handled by default mostly, but let's be explicit
+    // renderSongList was already called, so setup-panel should be ready.
+}
 
 async function loadLocalSong() {
     try {
@@ -673,8 +870,8 @@ function selectDifficulty(chartIndex) {
             setText('bs-acc', accText + "%");
 
             setText('bs-ssr', (top.ssr || 0).toFixed(2));
-            // Recalculate FC Type to match latest logic (BF/FC changes)
-            const calculatedFC = top.judgments ? getFCType(top.judgments) : (top.fcType || "");
+            // Use saved FC Type (Fail/Invalid support) or calculate legacy
+            const calculatedFC = top.fcType || (top.judgments ? getFCType(top.judgments) : "");
             setText('bs-clear', calculatedFC);
 
             // Judge Grid
@@ -723,10 +920,17 @@ function calculateDetailedDifficulty(notes) {
     let rate = 1.0;
     if (typeof modConfig !== 'undefined' && modConfig.rate) rate = modConfig.rate;
 
+    // Filter out mines for all stats
+    // We strictly only want 'tappable' notes: Tap, Hold Head, Roll Head.
+    // Mines are excluded. Fakes/Lifts if present would also be excluded by this whitelist.
+    // Hold/Roll Bodies are not separate note objects in this parser, so they are naturally excluded (only heads exist).
+    const validNotes = notes.filter(n => n.type === 'tap' || n.type === 'hold' || n.type === 'roll');
+    if (validNotes.length === 0) return { overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0, nps: 0, peak: 0 };
+
     const rows = [];
-    let currentRow = { time: notes[0].time, notes: [] };
-    for (let note of notes) {
-        if (Math.abs(note.time - currentRow.time) < 0.001) { currentRow.notes.push(note); }
+    let currentRow = { time: validNotes[0].time, notes: [] };
+    for (let note of validNotes) {
+        if (Math.abs(note.time - currentRow.time) < 0.002) { currentRow.notes.push(note); }
         else { rows.push(currentRow); currentRow = { time: note.time, notes: [note] }; }
     }
     rows.push(currentRow);
@@ -734,14 +938,22 @@ function calculateDetailedDifficulty(notes) {
 
     let maxNPS = 0;
     const streamStrains = [], jsStrains = [], hsStrains = [], cjStrains = [], techStrains = [];
-    const windowSize = 0.5; let windowStart = rows[0].time; let windowIndex = 0;
+    const windowPenalties = [];
+    const windowSize = 1.0; let windowStart = rows[0].time; let windowIndex = 0;
 
     while (windowIndex < rows.length) {
         let noteCount = 0, chordCount = 0, handCount = 0, jackCount = 0;
+        const colCounts = [0, 0, 0, 0];
+        const buckets = new Set();
         let i = windowIndex;
         while (i < rows.length && rows[i].time < windowStart + windowSize) {
             const rowNotes = rows[i].notes;
             noteCount += rowNotes.length;
+            rowNotes.forEach(n => {
+                if (n.col >= 0 && n.col < 4) colCounts[n.col]++;
+                buckets.add(Math.floor(n.time * 100)); // 10ms buckets
+            });
+
             if (rowNotes.length >= 2) chordCount++;
             if (rowNotes.length >= 3) handCount++;
             if (i > 0) {
@@ -755,12 +967,61 @@ function calculateDetailedDifficulty(notes) {
         const nps = noteCount / windowSize;
         if (nps > maxNPS) maxNPS = nps;
 
-        let sStr = nps * rate; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
-        let sJs = nps * rate; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
+        // Pattern Heuristics
+        let vibroFactor = 1.0;
+        let quadFactor = 1.0;
+        let rollFactor = 1.0;
+        let quantizedDensity = 0;
+        let concentration = 0;
+
+        if (nps > 15) {
+            // Vibro: Penalty for high concentration in top 2 columns (Trills)
+            const sortedCounts = [...colCounts].sort((a, b) => b - a);
+            const top2 = sortedCounts[0] + sortedCounts[1];
+            concentration = noteCount > 0 ? top2 / noteCount : 0;
+            if (concentration > 0.8) {
+                vibroFactor = Math.max(0.6, 1.0 - (concentration - 0.8) * 2.0);
+            }
+
+            // Quadspam: Quantized Density Check
+            // Count effective rows using 10ms buckets
+            const effectiveRows = buckets.size || 1;
+            quantizedDensity = noteCount / effectiveRows;
+
+            if (quantizedDensity > 2.5) {
+                // Punishment for Hands (3.0) -> 0.5x, Quads (4.0) -> 0.4x
+                quadFactor = Math.max(0.4, 1.0 - (quantizedDensity - 2.5) * 1.0);
+            }
+
+            // Roll/Speed Cap: If NPS > 30 and Density is Low (Single note stream/roll), cap it.
+            if (nps > 30 && quantizedDensity < 1.6) {
+                rollFactor = 30.0 / nps;
+            }
+
+            if (nps > 40) {
+                console.log(`[DiffCalc] NPS: ${nps.toFixed(1)} | Den: ${quantizedDensity.toFixed(2)} | Conc: ${concentration.toFixed(2)} | Pen: ${Math.min(vibroFactor, quadFactor, rollFactor).toFixed(2)}`);
+            }
+        }
+
+        // Apply penalty directly to this window's strains
+        const penalty = Math.min(vibroFactor, quadFactor, rollFactor);
+        const penalizedNPS = nps * penalty;
+
+        const rowCount = i - windowIndex;
+        const jackFrequency = rowCount > 0 ? jackCount / rowCount : 0;
+        const chordFrequency = rowCount > 0 ? chordCount / rowCount : 0;
+
+        let sStr = penalizedNPS * rate; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
+        let sJs = penalizedNPS * rate; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
         if (jumpRatio < 0.2) sJs *= 0.2; else sJs *= (0.8 + jumpRatio * 0.4); jsStrains.push(sJs);
-        let sHs = 0; if (handCount > 0) { sHs = (nps * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
-        let sCj = 0; if (chordCount > 0 && jackCount > 0) { sCj = (nps * rate) * 0.8 + (jackCount * 1.5) + (chordCount * 1.0); } cjStrains.push(sCj);
-        let sTech = (nps * rate) * 0.4 + (jackCount * 2.5); techStrains.push(sTech);
+        let sHs = 0; if (handCount > 0) { sHs = (penalizedNPS * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
+
+        // Reworked CJ/Tech: NPS * Rate * Frequency
+        let sCj = penalizedNPS * rate * chordFrequency * jackFrequency;
+        cjStrains.push(sCj);
+
+        let sTech = penalizedNPS * rate * (0.4 + jackFrequency);
+        techStrains.push(sTech);
 
         windowStart += 0.5;
         while (windowIndex < rows.length && rows[windowIndex].time < windowStart) windowIndex++;
@@ -775,6 +1036,7 @@ function calculateDetailedDifficulty(notes) {
 
     const sStream = aggregate(streamStrains); const sJS = aggregate(jsStrains); const sHS = aggregate(hsStrains);
     const sCJ = aggregate(cjStrains); const sTech = aggregate(techStrains);
+
     const duration = (rows[rows.length - 1].time - rows[0].time) / rate;
 
     const denseThreshold = maxNPS * rate * 0.5;
@@ -782,9 +1044,9 @@ function calculateDetailedDifficulty(notes) {
     const avgDense = denseStrains.length > 0 ? denseStrains.reduce((a, b) => a + b, 0) / denseStrains.length : 0;
     let sStamina = avgDense * (1 + Math.log10(Math.max(1, duration / 60)));
 
-    const scale = (val) => { return 45 * (1 - Math.exp(-val / 25)); };
+    const scale = (val) => { return 45 * (1 - Math.exp(-Math.pow(val / 25.5, 2.5))); };
     let result = {
-        nps: (notes.length / duration), peak: maxNPS * rate, stream: scale(sStream), jumpstream: scale(sJS),
+        nps: (validNotes.length / duration), peak: maxNPS * rate, stream: scale(sStream), jumpstream: scale(sJS),
         handstream: scale(sHS), chordjack: scale(sCJ), technical: scale(sTech), stamina: scale(sStamina)
     };
     const skills = [result.stream, result.jumpstream, result.handstream, result.chordjack, result.technical, result.stamina];
@@ -891,7 +1153,7 @@ async function startGameFromMenu() {
             // Actually chart.notes is referenced. applyChartTransforms should return a NEW array.
             const gameChart = { ...chart, notes: finalNotes };
 
-            initGame(gameChart, decoded, song.meta, difficultyCalc);
+            initGame(gameChart, decoded, song.meta, difficultyCalc, audioUrl);
         } catch (e) {
             console.error("Error decoding audio: " + e.message);
             document.getElementById('loading-status').style.display = 'none';
@@ -1030,12 +1292,23 @@ function triggerFail() {
     if (userConfig.failMode === 'off') return;
     gameState.failed = true;
     gameState.isPlaying = false;
-    audioCtx.suspend();
-    document.getElementById('failed-overlay').style.display = 'block';
+
+    // Stop Audio (Vinyl)
+    if (audioCtx.state === 'running') audioCtx.suspend();
+    // Stop Audio (Stretch)
+    if (gameState.audioEl) gameState.audioEl.pause();
+
+    document.getElementById('failed-overlay').style.display = 'flex';
+    // Trigger reflow or use RAF to ensure transition happens
+    requestAnimationFrame(() => {
+        document.getElementById('failed-overlay').classList.add('visible');
+    });
+
     setTimeout(() => {
+        document.getElementById('failed-overlay').classList.remove('visible');
         document.getElementById('failed-overlay').style.display = 'none';
         showResults();
-    }, 2000);
+    }, 2500); // 2s fade + 0.5s hold
 }
 
 function triggerJudgement(note, offsetMs, isMiss = false) {
@@ -1061,6 +1334,10 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 
         if (isMiss) {
             judgeText = "MISS"; judgeClass = "judge-miss"; breaksCombo = true; gameState.judgments.miss++; lifeChange = -8.0;
+            if (note.type === 'hold' || note.type === 'roll') {
+                note.holdState = 'missed'; // Mark as missed so we can draw the dead body
+                note.processed = false; // Do not cleanup yet, let it scroll
+            }
         } else {
             if (absOffset <= J_MARVELOUS) {
                 judgeText = "MARVELOUS"; judgeClass = "judge-marvelous"; breaksCombo = false;
@@ -1071,7 +1348,7 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
                 scoreAdd = baseNoteScore - 10; gameState.judgments.perfect++; lifeChange = 0.8;
             }
             else if (absOffset <= J_GREAT) {
-                judgeText = "GREAT"; judgeClass = "judge-great"; breaksCombo = false; // User Request: Do not break combo
+                judgeText = "GREAT"; judgeClass = "judge-great"; breaksCombo = false;
                 scoreAdd = (baseNoteScore - 10) * 0.6; gameState.judgments.great++; lifeChange = 0.4;
             }
             else if (absOffset <= J_GOOD) {
@@ -1079,12 +1356,20 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
                 scoreAdd = (baseNoteScore - 10) * 0.2; gameState.judgments.good++; lifeChange = 0.0;
             }
             else if (absOffset <= J_BAD) { judgeText = "BAD"; judgeClass = "judge-bad"; breaksCombo = true; gameState.judgments.bad++; lifeChange = -4.0; }
-            else { judgeText = "MISS"; judgeClass = "judge-miss"; breaksCombo = true; gameState.judgments.miss++; lifeChange = -8.0; }
+            else {
+                judgeText = "MISS"; judgeClass = "judge-miss"; breaksCombo = true; gameState.judgments.miss++; lifeChange = -8.0;
+                if (note.type === 'hold' || note.type === 'roll') {
+                    note.holdState = 'missed';
+                    note.processed = false;
+                }
+            }
         }
         scoreAdd = Math.max(0, scoreAdd); gameState.score += scoreAdd;
+
+        // If it was a hit (not miss), set active. IF it was a miss, we already handled it above.
         if (!isMiss && (note.type === 'hold' || note.type === 'roll')) {
             note.holdState = 'active'; note.processed = false; note.lastPressTime = audioCtx.currentTime - gameState.startTime;
-        } else { note.processed = true; }
+        } else if (!isMiss) { note.processed = true; } // Taps/Mines processed immediately on hit
 
         gameState.detailedHits.push({
             time: audioCtx.currentTime - gameState.startTime,
@@ -1136,8 +1421,9 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 function triggerHoldJudgement(note, isOK) {
     if (gameState.failed) return;
     if (isOK) {
-        gameState.judgments.ok++;
-        gameState.combo++;
+        // Hold OK: Successful hold end.
+        // Per request: Do not increment combo or judgment count for tails.
+        // We still award life for holding successfully.
         gameState.life = Math.min(100, gameState.life + 0.4);
     } else {
         gameState.judgments.ng++;
@@ -1406,8 +1692,17 @@ function handleLeaderboard() {
 
     // Calculate extra stats
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
-    const ssr = calculateSSR(diff, acc);
-    const fcType = gameState.failed ? "Failed" : getFCType(gameState.judgments);
+
+    // Determine Clear Type and SSR
+    let fcType = getFCType(gameState.judgments);
+    let ssr = calculateSSR(diff, acc);
+
+    if (gameState.failed) {
+        fcType = "Fail";
+        ssr = 0;
+    } else if ((acc * 100) < 83 || gameState.hasPausedDuringPlay) {
+        fcType = "Invalid"; // Invalid Clear
+    }
 
     const entry = {
         score: Math.round(gameState.score),
@@ -1458,10 +1753,32 @@ function showResults() {
     const accPct = acc * 100;
 
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
-    const ssr = calculateSSR(diff, acc);
 
-    setText('res-clear-type', getClearType());
-    setText('res-clear-type', getClearType());
+    // Determine Clear Type and SSR
+    let clearType = getFCType(gameState.judgments);
+    let ssr = calculateSSR(diff, acc);
+
+    if (gameState.failed) {
+        clearType = "Fail";
+        ssr = 0;
+    } else if (accPct < 83 || gameState.hasPausedDuringPlay) {
+        clearType = "Invalid";
+    }
+
+    setText('res-clear-type', clearType);
+
+    // Rate Display in Results
+    const resRateEl = document.getElementById('res-rate-display');
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    if (resRateEl) {
+        if (Math.abs(rate - 1.0) > 0.001) {
+            resRateEl.style.display = 'inline';
+            resRateEl.innerText = `(${rate.toFixed(2)}x)`;
+        } else {
+            resRateEl.style.display = 'none';
+        }
+    }
+
     const grade = gameState.failed ? "F" : getGrade(accPct);
     const gradeEl = document.getElementById('res-grade');
     if (gradeEl) {
@@ -1500,6 +1817,7 @@ function showResults() {
 }
 
 function quitGame() {
+    if (gameState.startTimeout) { clearTimeout(gameState.startTimeout); gameState.startTimeout = null; }
     if (audioSource) {
         try { audioSource.stop(); } catch (e) { console.warn(e); }
     }
@@ -1685,17 +2003,7 @@ function drawNote(note, y, rotation) {
         if (note.holdState === 'active') {
             drawHeadY = gameConfig.receptorY;
         }
-
-        // EFFECT: Apply Drunk to Hold Body?
-        // Complex. For now, Drunk shifts the WHOLE column, so yes X shifts.
-        // But drawing hold body usually requires straight rect.
-        // If Drunk is active, hold body should look wavy?
-        // Too expensive to draw wavy hold body with current rect implementation.
-        // We'll just shift the rect X based on Head X.
-
-        // Also check Visibility for Hold Body
-        // If Sudden, head might be visible but tail invisible?
-        // Using global alpha for whole note for simplicity.
+        // If missed, drawHeadY remains 'y' (scrolling away) as set above.
 
         const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody;
         const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody;
@@ -1709,6 +2017,12 @@ function drawNote(note, y, rotation) {
                 const ms = timeStr * 1000;
                 const graceAlpha = Math.max(0, 1 - (ms / 250));
                 ctx.globalAlpha *= graceAlpha;
+            }
+
+            // Dim Missed Holds
+            if (note.holdState === 'missed') {
+                ctx.globalAlpha *= 0.5; // Dim the body
+                // Optional: Gray scale filter? 
             }
 
             ctx.beginPath();
@@ -1726,11 +2040,41 @@ function drawNote(note, y, rotation) {
             const scale = w / bodyImg.width;
             const sHeight = bodyImg.height * scale;
             const count = Math.ceil(rh / sHeight) + 1;
-            const scrollOffset = (Date.now() / 10) % sHeight;
 
-            for (let k = -1; k < count; k++) {
-                ctx.drawImage(bodyImg, bx, ry + (k * sHeight) - scrollOffset, w, sHeight);
+            // Fix Texture Sliding:
+            // Texture should be anchored to the Note's virtual Y position (y), not the Clipped Y (ry).
+            // ry moves differently when active (locked to receptor).
+            // y moves constantly with scroll.
+            // When y matches ry (missed/inactive), texture matches.
+            // When active, ry is fixed, y moves. We want texture to move (follow tail).
+            // So we offset drawing by (y % sHeight) or similar.
+
+            // We want the "Top" of the image to align with 'y'.
+            // So calculate startY based on 'y'.
+            // We need to cover the area starting at 'ry'.
+            // Find minimal k such that (y + k*sHeight) < ry (or just cover the area).
+
+            // Just drawing from 'y' downwards (or upwards) and letting clip handle it is easiest?
+            // If downscroll: y is top (head). Tail is y - dist. 
+            // We draw usually from Head to Tail (or Tail to Head?).
+            // Let's assume standard texture is Top-Down.
+
+            // We loop k relative to y.
+            // We need to fill range [MinY, MaxY] of the rect.
+            const rectTop = Math.min(drawHeadY, drawTailY);
+            const rectBottom = Math.max(drawHeadY, drawTailY);
+
+            // Calculate offset relative to Y
+            // e.g. We want an image at y, y+h, y+2h...
+            // Find index of first image that overlaps rectTop.
+            // startImageIndex = floor((rectTop - y) / sHeight)
+            const startK = Math.floor((rectTop - y) / sHeight);
+            const endK = Math.ceil((rectBottom - y) / sHeight);
+
+            for (let k = startK; k <= endK; k++) {
+                ctx.drawImage(bodyImg, bx, y + (k * sHeight), w, sHeight);
             }
+
             ctx.restore();
         }
     }
@@ -1859,7 +2203,12 @@ function gameLoop() {
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
 
     if (gameState.mode === 'stretch' && gameState.audioEl) {
-        currentTime = gameState.audioEl.currentTime;
+        if (!gameState.audioEl.paused) {
+            currentTime = gameState.audioEl.currentTime;
+        } else if (Date.now() < gameState.startTime) {
+            // Countdown phase
+            currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
+        }
         // Check end
         if (gameState.audioEl.ended) {
             // Handle finish similar to audioSource.onended or simple timeout check
@@ -1959,7 +2308,13 @@ function gameLoop() {
             }
         }
 
-        if (note.processed && note.holdState !== 'active') return;
+        if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') return;
+
+        // Cleanup Missed Holds that have passed
+        if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) { // +0.5 buffer
+            note.processed = true;
+            return;
+        }
 
         const timeDiff = note.time - currentTime;
         if (note.type === 'mine' && !note.processed) {
@@ -2017,7 +2372,23 @@ function gameLoop() {
         let y;
         if (userConfig.downScroll) y = gameConfig.receptorY - (timeDiff * gameConfig.scrollSpeed);
         else y = gameConfig.receptorY + (timeDiff * gameConfig.scrollSpeed);
-        if (y > -1000 && y < canvas.height + 1000) {
+
+        // Visibility Check: Account for Tail (minY to maxY)
+        let noteTop = y;
+        let noteBottom = y;
+
+        if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
+            const duration = note.endTime - note.time;
+            const dist = duration * gameConfig.scrollSpeed;
+            let tailY;
+            if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist;
+
+            noteTop = Math.min(y, tailY);
+            noteBottom = Math.max(y, tailY);
+        }
+
+        // Add buffer (1000px)
+        if (noteBottom > -1000 && noteTop < canvas.height + 1000) {
             const rowIndex = getNoteRowIndex(note.beat);
             let rot = assets.loaded.arrowSprite ? spriteRotations[note.col] : vectorRotations[note.col];
             drawNote(note, y, rot);
@@ -2103,6 +2474,16 @@ window.saveSettings = saveSettings;
 function togglePause() {
     if (!gameState.isPlaying || gameState.failed) return;
 
+    // Prevent pause during countdown (negative time)
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    let cTime = 0;
+    if (gameState.mode === 'stretch' && gameState.audioEl) {
+        cTime = !gameState.audioEl.paused ? gameState.audioEl.currentTime : ((Date.now() - gameState.startTime) / 1000 * rate);
+    } else if (audioCtx) {
+        cTime = (audioCtx.currentTime - gameState.startTime) * rate;
+    }
+    if (cTime < 0) return;
+
     if (gameState.isPaused) {
         // Resume handled by resumeGame
         resumeGame();
@@ -2113,8 +2494,18 @@ function togglePause() {
 
         if (gameState.mode === 'stretch' && gameState.audioEl) {
             gameState.audioEl.pause();
+            // Check for Invalid Condition (Pause after first note)
+            if (gameState.audioEl.currentTime >= gameState.firstNoteTime) {
+                gameState.hasPausedDuringPlay = true;
+            }
         } else if (audioCtx && audioCtx.state === 'running') {
             audioCtx.suspend();
+            // Check for Invalid Condition (Pause after first note)
+            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+            const cTime = (audioCtx.currentTime - gameState.startTime) * rate;
+            if (cTime >= gameState.firstNoteTime) {
+                gameState.hasPausedDuringPlay = true;
+            }
         }
 
         document.getElementById('pause-menu').style.display = 'flex';
@@ -2165,7 +2556,60 @@ function resumeGame() {
     document.getElementById('pause-menu').style.display = 'none';
     requestAnimationFrame(gameLoop);
 }
-window.resumeGame = resumeGame; function handleInput(e) {
+window.resumeGame = resumeGame;
+
+// RATE CONTROL LOGIC
+window.addEventListener('keydown', (e) => {
+    // Only allow global rate control if not binding keys and not in gameplay (or allow in gameplay? User asked for keys, usually modifiers are menu only or pause).
+    // Let's allow it in menu/song select. 
+    // If playing, we might not want to change rate mid-song unless practicing?
+    // User request: "wire - and = key to adjust rates".
+    // Safest: Allow everywhere for now, or check generic "typing" state (none here).
+
+    if (e.key === '-' || e.key === '_') {
+        changeRateVal(-1);
+    } else if (e.key === '=' || e.key === '+') {
+        changeRateVal(1);
+    }
+});
+
+// Callback from modifiers.js changeRateVal
+window.onRateChange = (newRate) => {
+    // Update Banner Display
+    const bannerBadge = document.getElementById('ss-rate-badge');
+    if (bannerBadge) {
+        if (Math.abs(newRate - 1.0) > 0.001) {
+            bannerBadge.style.display = 'block';
+            bannerBadge.innerText = newRate.toFixed(2) + "x";
+        } else {
+            bannerBadge.style.display = 'none';
+        }
+    }
+
+    // Update Difficulty Stats if on Song Select and chart selected
+    if (typeof selectedSongIndex !== 'undefined' && selectedSongIndex !== -1 &&
+        typeof selectedChartIndex !== 'undefined' && selectedChartIndex !== -1) {
+
+        const song = songLibrary[selectedSongIndex];
+        if (song && song.charts && song.charts[selectedChartIndex]) {
+            const chart = song.charts[selectedChartIndex];
+            if (chart.notes) {
+                const calc = calculateDetailedDifficulty(chart.notes);
+                setText('calc-nps', calc.nps.toFixed(2));
+                setText('calc-peak', calc.peak.toFixed(2));
+                setText('calc-overall', calc.overall.toFixed(1));
+                setText('calc-stream', calc.stream.toFixed(1));
+                setText('calc-jumpstream', calc.jumpstream.toFixed(1));
+                setText('calc-handstream', calc.handstream.toFixed(1));
+                setText('calc-chordjack', calc.chordjack.toFixed(1));
+                setText('calc-technical', calc.technical.toFixed(1));
+                setText('calc-stamina', calc.stamina.toFixed(1));
+            }
+        }
+    }
+};
+
+function handleInput(e) {
     if (e.code === 'Escape') { if (e.type === 'keydown') togglePause(); return; }
     if (!gameState.isPlaying || gameState.isPaused) return;
     const key = e.key.toLowerCase();
@@ -2199,13 +2643,22 @@ window.resumeGame = resumeGame; function handleInput(e) {
     if (e.type !== 'keydown') return;
 
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-    const currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
+
+    let currentTime = 0;
+    if (gameState.mode === 'stretch' && gameState.audioEl) {
+        currentTime = gameState.audioEl.currentTime;
+    } else {
+        currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
+    }
 
     // Find Hittable Note - Optimized Search
     let hittableNote = null;
     for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
         const n = gameState.activeNotes[i];
         if (n.processed) continue;
+
+        // Fix: Ignore already active holds. They are handled by the hold logic loop, not new hits.
+        if (n.holdState === 'active') continue;
 
         // Time diff
         const diff = n.time - currentTime;
@@ -2341,6 +2794,10 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     gameState.activeNotes = gameState.notes; // For now all notes are "active" candidates
     gameState.totalNotesInChart = notes.filter(n => n.type !== 'mine').length;
 
+    const firstNote = notes.find(n => n.type !== 'mine');
+    gameState.firstNoteTime = firstNote ? firstNote.time : 0;
+    gameState.hasPausedDuringPlay = false;
+
     // Fix: Add Event Listeners for Pause Menu Buttons
     const resumeBtn = document.getElementById('pause-resume-btn');
     const quitBtn = document.getElementById('pause-quit-btn');
@@ -2360,8 +2817,10 @@ function startEngine() {
     const useVinyl = (typeof modConfig !== 'undefined' && modConfig.pitchShift !== undefined) ? modConfig.pitchShift : true;
 
     // cleanup previous
+    // cleanup previous
     if (audioSource) { try { audioSource.stop(); } catch (e) { } audioSource = null; }
     if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
+    if (gameState.startTimeout) { clearTimeout(gameState.startTimeout); gameState.startTimeout = null; }
 
     if (useVinyl) {
         // --- VINYL MODE (Buffer Source) ---
@@ -2374,7 +2833,8 @@ function startEngine() {
             }
         };
         audioSource.connect(audioCtx.destination);
-        const startTime = audioCtx.currentTime + 0.1; // small buffer
+        audioSource.connect(audioCtx.destination);
+        const startTime = audioCtx.currentTime + 3.0; // 3.0s delay
         audioSource.start(startTime);
         gameState.startTime = startTime;
         gameState.mode = 'vinyl';
@@ -2390,15 +2850,14 @@ function startEngine() {
         gameState.audioEl.playbackRate = rate;
         gameState.audioEl.preservesPitch = true; // Specific property, usually default true
 
-        // Sync start
-        // We can't schedule exact future start like WebAudio, but we can play immediately.
-        gameState.audioEl.play().then(() => {
-            // Adjust gameState.startTime so our 'currentTime' logic works?
-            // Actually, for AudioEl, we should just read audioEl.currentTime.
-            // But gameLoop expects `audioCtx.currentTime - gameState.startTime`.
-            // Let's flag logic change in gameLoop.
-            gameState.startTime = Date.now(); // Not used for sync in this mode, but for ref
-        }).catch(e => console.error("Audio Play Error:", e));
+        const START_DELAY_MS = 3000;
+        gameState.startTime = Date.now() + START_DELAY_MS;
+
+        // Schedule play
+        gameState.startTimeout = setTimeout(() => {
+            gameState.audioEl.play().catch(e => console.error("Audio Play Error:", e));
+            gameState.startTimeout = null;
+        }, START_DELAY_MS);
 
         gameState.mode = 'stretch';
     }
@@ -2408,6 +2867,24 @@ function startEngine() {
     gameState.failed = false;
     gameState.life = 50;
     gameState.combo = 0;
+
+    // Reset HUD Elements
+    const jEl = document.getElementById('judgment');
+    if (jEl) {
+        jEl.className = '';
+        jEl.innerText = '';
+        jEl.style.removeProperty('opacity'); // Remove inline style so CSS class can control it
+    }
+    const cEl = document.getElementById('combo');
+    if (cEl) {
+        cEl.innerText = '';
+        cEl.style.visibility = 'hidden'; // Hide combo until first hit
+    }
+    const failEl = document.getElementById('failed-overlay');
+    if (failEl) {
+        failEl.style.display = 'none';
+        failEl.classList.remove('visible');
+    }
 
     // Sync Config
     if (typeof modConfig !== 'undefined') {

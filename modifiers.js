@@ -155,7 +155,7 @@ function changeSpeedVal(delta) {
 function changeRateVal(delta) {
     const step = 0.05;
     let newRate = modConfig.rate + (delta * step);
-    newRate = Math.max(0.1, Math.min(5.0, newRate)); // Extended range for fun
+    newRate = Math.max(0.7, Math.min(3.0, newRate)); // Clamped per user request
     modConfig.rate = Math.round(newRate * 100) / 100;
     updateModifiersUI();
     if (window.onRateChange) window.onRateChange(modConfig.rate);
