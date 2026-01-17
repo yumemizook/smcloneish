@@ -425,16 +425,32 @@ function setScreen(screenName) {
         if (el) el.style.display = 'none';
     });
 
+    const helpBtn = document.getElementById('help-btn');
+
     if (screenName === 'setup-panel') {
         document.getElementById('setup-panel').style.display = 'block';
+        if (helpBtn) helpBtn.style.display = 'flex';
         return;
     }
+
+    // Hide help button on all other screens
+    if (helpBtn) helpBtn.style.display = 'none';
 
     if (screenName) {
         const target = document.getElementById(screenName);
         if (target) target.style.display = 'flex';
     }
 }
+
+function openHelp() {
+    document.getElementById('help-modal').style.display = 'flex';
+}
+window.openHelp = openHelp;
+
+function closeHelp() {
+    document.getElementById('help-modal').style.display = 'none';
+}
+window.closeHelp = closeHelp;
 
 function setText(id, text) {
     const el = document.getElementById(id);
@@ -693,8 +709,8 @@ function renderSongList() {
             missingIndicator = '<span title="Files missing. Re-import song." style="color: #ffcc00; margin-right: 6px;">\u26A0\uFE0F</span>';
         }
 
-        const subtitle = song.meta.subtitle ? `<span style="font-size:0.8em; color:#aaa; display:block; margin-bottom:2px;">${song.meta.subtitle}</span>` : '';
-        item.innerHTML = `<div class="song-item-info"><span class="song-item-title">${missingIndicator}${song.meta.title}</span>${subtitle}<span class="song-item-artist">${song.meta.artist}</span></div><div class="diff-squares">${squares}</div>`;
+        const subtitle = song.meta.subtitle ? `<span class="song-item-subtitle">${song.meta.subtitle}</span>` : '';
+        item.innerHTML = `<div class="song-item-info"><span class="song-item-title">${missingIndicator}${song.meta.title}</span><span class="song-item-artist">${song.meta.artist}</span></div>${subtitle}<div class="diff-squares">${squares}</div>`;
         list.appendChild(item);
     });
 }
@@ -2893,74 +2909,9 @@ function startEngine() {
     }
 
     requestAnimationFrame(gameLoop);
-} function parseSM(text) {
-    const charts = [];
-    const meta = {};
-    text = text.replace(/\/\/.*$/mg, '');
-    const getTag = (tag) => {
-        const match = text.match(new RegExp(`#${tag}:(.*?);`, 'i'));
-        return match ? match[1].trim() : null;
-    };
-    meta.title = getTag('TITLE') || "Unknown";
-    meta.artist = getTag('ARTIST') || "Unknown";
-    meta.music = getTag('MUSIC');
-    meta.banner = getTag('BANNER');
-    meta.background = getTag('BACKGROUND');
-    meta.cdtitle = getTag('CDTITLE');
-    meta.offset = parseFloat(getTag('OFFSET')) || 0;
-    const bpmMatch = text.match(/#BPMS:([\s\S]*?);/i);
-    meta.bpms = bpmMatch ? bpmMatch[1].trim().split(',').map(b => {
-        const p = b.split('=');
-        return { beat: parseFloat(p[0]), value: parseFloat(p[1]) };
-    }) : [{ beat: 0, value: 120 }];
-    const rawCharts = text.split(/#NOTES:/i);
-    rawCharts.shift();
-    rawCharts.forEach(raw => {
-        const parts = raw.split(':');
-        if (parts.length >= 6) {
-            const type = parts[0].trim();
-            if (type === 'dance-single') {
-                charts.push({
-                    difficulty: parts[2].trim(),
-                    meter: parts[3].trim(),
-                    notes: parseNoteData(parts[5].replace(';', '').trim(), meta.bpms, meta.offset)
-                });
-            }
-        }
-    });
-    return { meta, charts };
 }
 
-function parseNoteData(data, bpms, songOffset) {
-    const measures = data.split(',');
-    const notes = [];
-    let currentBeat = 0;
-    let activeHolds = [null, null, null, null];
-    measures.forEach((measure) => {
-        const lines = measure.trim().split(/\s+/);
-        const rows = lines.length;
-        const beatPerLine = 4 / rows;
-        const bpm = bpms[0].value;
-        const secondsPerBeat = 60 / bpm;
-        lines.forEach((line, rowIndex) => {
-            const exactBeat = currentBeat + (rowIndex * beatPerLine);
-            const time = (exactBeat * secondsPerBeat) - songOffset;
-            for (let col = 0; col < 4; col++) {
-                const char = line[col];
-                if (char === '1' || char === '2' || char === '4' || char === 'M') {
-                    const type = char === '1' ? 'tap' : (char === '2' ? 'hold' : (char === '4' ? 'roll' : 'mine'));
-                    const note = { beat: exactBeat, time: time, col: col, type: type, hit: false, processed: false, holdState: 'inactive', endTime: null };
-                    notes.push(note);
-                    if (type === 'hold' || type === 'roll') { activeHolds[col] = note; }
-                } else if (char === '3') {
-                    if (activeHolds[col]) { activeHolds[col].endTime = time; activeHolds[col] = null; }
-                }
-            }
-        });
-        currentBeat += 4;
-    });
-    return notes.sort((a, b) => a.time - b.time);
-}
+
 
 const fileInput = document.getElementById('file-input');
 const zipInput = document.getElementById('zip-input');

@@ -16,7 +16,7 @@
     <div id="bg-layer"></div>
 
     <div id="ui-layer">
-        
+
         <!-- Intro / Loading Screen -->
         <div id="intro-screen">
             <div id="intro-content">
@@ -135,10 +135,13 @@
                     <div class="mod-header-row">
                         <h2>Modifiers</h2>
                         <div class="mod-tabs">
-                            <button id="mod-tab-speed" class="mod-tab-btn active" onclick="showModTab('speed')">Speed</button>
-                            <button id="mod-tab-display" class="mod-tab-btn" onclick="showModTab('display')">Display</button>
+                            <button id="mod-tab-speed" class="mod-tab-btn active"
+                                onclick="showModTab('speed')">Speed</button>
+                            <button id="mod-tab-display" class="mod-tab-btn"
+                                onclick="showModTab('display')">Display</button>
                             <button id="mod-tab-notes" class="mod-tab-btn" onclick="showModTab('notes')">Notes</button>
-                            <button id="mod-tab-effects" class="mod-tab-btn" onclick="showModTab('effects')">Effects</button>
+                            <button id="mod-tab-effects" class="mod-tab-btn"
+                                onclick="showModTab('effects')">Effects</button>
                         </div>
                     </div>
 
@@ -147,9 +150,12 @@
                         <div class="mod-group" id="mod-speed-type">
                             <label>Speed Mod</label>
                             <div class="mod-toggles">
-                                <button class="mod-toggle-btn" data-val="X" onclick="setModifier('speedType','X')">X (Mult)</button>
-                                <button class="mod-toggle-btn" data-val="C" onclick="setModifier('speedType','C')">C (Const)</button>
-                                <button class="mod-toggle-btn" data-val="M" onclick="setModifier('speedType','M')">M (Max)</button>
+                                <button class="mod-toggle-btn" data-val="X" onclick="setModifier('speedType','X')">X
+                                    (Mult)</button>
+                                <button class="mod-toggle-btn" data-val="C" onclick="setModifier('speedType','C')">C
+                                    (Const)</button>
+                                <button class="mod-toggle-btn" data-val="M" onclick="setModifier('speedType','M')">M
+                                    (Max)</button>
                             </div>
                         </div>
 
@@ -174,60 +180,77 @@
                         <div class="mod-group" id="mod-pitch">
                             <label>Pitch Shift</label>
                             <div class="mod-toggles">
-                                <button class="mod-toggle-btn" data-val="on" onclick="setModifier('pitchShift','on')">On</button>
-                                <button class="mod-toggle-btn" data-val="off" onclick="setModifier('pitchShift','off')">Off</button>
+                                <button class="mod-toggle-btn" data-val="on"
+                                    onclick="setModifier('pitchShift','on')">On</button>
+                                <button class="mod-toggle-btn" data-val="off"
+                                    onclick="setModifier('pitchShift','off')">Off</button>
                             </div>
                         </div>
-                        
-                         <div class="mod-group" id="mod-fail">
+
+                        <div class="mod-group" id="mod-fail">
                             <label>Fail Mode</label>
                             <div class="mod-toggles">
-                                <button class="mod-toggle-btn" data-val="on" onclick="setModifier('fail','on')">On</button>
-                                <button class="mod-toggle-btn" data-val="off" onclick="setModifier('fail','off')">Off</button>
-                                <button class="mod-toggle-btn" data-val="end" onclick="setModifier('fail','end')">End</button>
+                                <button class="mod-toggle-btn" data-val="on"
+                                    onclick="setModifier('fail','on')">On</button>
+                                <button class="mod-toggle-btn" data-val="off"
+                                    onclick="setModifier('fail','off')">Off</button>
+                                <button class="mod-toggle-btn" data-val="end"
+                                    onclick="setModifier('fail','end')">End</button>
                             </div>
                         </div>
                     </div>
 
                     <!-- TAB: DISPLAY -->
                     <div id="mod-section-display" class="mod-section-content" style="display:none;">
-                         <div class="mod-group" id="mod-scroll-dir">
+                        <div class="mod-group" id="mod-scroll-dir">
                             <label>Scroll Direction</label>
                             <div class="mod-toggles">
-                                <button class="mod-toggle-btn" data-val="up" onclick="setModifier('direction','up')">Upscroll</button>
-                                <button class="mod-toggle-btn" data-val="down" onclick="setModifier('direction','down')">Downscroll</button>
+                                <button class="mod-toggle-btn" data-val="up"
+                                    onclick="setModifier('direction','up')">Upscroll</button>
+                                <button class="mod-toggle-btn" data-val="down"
+                                    onclick="setModifier('direction','down')">Downscroll</button>
                             </div>
                         </div>
 
                         <div class="mod-group" id="mod-appear-type">
                             <label>Appearance</label>
                             <div class="mod-toggles">
-                                <button class="mod-toggle-btn" data-val="visible" onclick="setModifier('appearType','visible')">Visible</button>
-                                <button class="mod-toggle-btn" data-val="hidden" onclick="setModifier('appearType','hidden')">Hidden</button>
-                                <button class="mod-toggle-btn" data-val="sudden" onclick="setModifier('appearType','sudden')">Sudden</button>
-                                <button class="mod-toggle-btn" data-val="stealth" onclick="setModifier('appearType','stealth')">Stealth</button>
+                                <button class="mod-toggle-btn" data-val="visible"
+                                    onclick="setModifier('appearType','visible')">Visible</button>
+                                <button class="mod-toggle-btn" data-val="hidden"
+                                    onclick="setModifier('appearType','hidden')">Hidden</button>
+                                <button class="mod-toggle-btn" data-val="sudden"
+                                    onclick="setModifier('appearType','sudden')">Sudden</button>
+                                <button class="mod-toggle-btn" data-val="stealth"
+                                    onclick="setModifier('appearType','stealth')">Stealth</button>
                             </div>
                         </div>
 
                         <div class="mod-group">
-                             <label>Appearance Offset</label>
-                             <div class="slider-row">
-                                 <input type="range" id="mod-appear-offset-slider" min="0" max="100" step="5" oninput="setModifier('appearOffset', this.value)">
-                                 <span id="mod-appear-offset-val">50%</span>
-                             </div>
+                            <label>Appearance Offset</label>
+                            <div class="slider-row">
+                                <input type="range" id="mod-appear-offset-slider" min="0" max="100" step="5"
+                                    oninput="setModifier('appearOffset', this.value)">
+                                <span id="mod-appear-offset-val">50%</span>
+                            </div>
                         </div>
                     </div>
 
                     <!-- TAB: NOTES -->
                     <div id="mod-section-notes" class="mod-section-content" style="display:none;">
-                         <div class="mod-group" id="mod-turn">
+                        <div class="mod-group" id="mod-turn">
                             <label>Turn</label>
                             <div class="mod-toggles">
-                                <button class="mod-toggle-btn" data-val="none" onclick="setModifier('turn','none')">None</button>
-                                <button class="mod-toggle-btn" data-val="mirror" onclick="setModifier('turn','mirror')">Mirror</button>
-                                <button class="mod-toggle-btn" data-val="left" onclick="setModifier('turn','left')">Left</button>
-                                <button class="mod-toggle-btn" data-val="right" onclick="setModifier('turn','right')">Right</button>
-                                <button class="mod-toggle-btn" data-val="shuffle" onclick="setModifier('turn','shuffle')">Shuffle</button>
+                                <button class="mod-toggle-btn" data-val="none"
+                                    onclick="setModifier('turn','none')">None</button>
+                                <button class="mod-toggle-btn" data-val="mirror"
+                                    onclick="setModifier('turn','mirror')">Mirror</button>
+                                <button class="mod-toggle-btn" data-val="left"
+                                    onclick="setModifier('turn','left')">Left</button>
+                                <button class="mod-toggle-btn" data-val="right"
+                                    onclick="setModifier('turn','right')">Right</button>
+                                <button class="mod-toggle-btn" data-val="shuffle"
+                                    onclick="setModifier('turn','shuffle')">Shuffle</button>
                             </div>
                         </div>
 
@@ -238,43 +261,55 @@
                                 <div class="mod-item" id="mod-tf-little">
                                     <span>Little</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','little')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','little')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','little')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','little')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-noJumps">
                                     <span>No Jumps</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','noJumps')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','noJumps')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','noJumps')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','noJumps')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-noHands">
                                     <span>No Hands</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','noHands')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','noHands')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','noHands')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','noHands')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-noMines">
                                     <span>No Mines</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','noMines')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','noMines')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','noMines')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','noMines')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-noHolds">
                                     <span>No Holds</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','noHolds')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','noHolds')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','noHolds')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','noHolds')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-noRolls">
                                     <span>No Rolls</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','noRolls')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','noRolls')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','noRolls')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','noRolls')">On</button>
                                     </div>
                                 </div>
                             </div>
@@ -285,43 +320,55 @@
                                 <div class="mod-item" id="mod-tf-big">
                                     <span>Big</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','big')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','big')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','big')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','big')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-quick">
                                     <span>Quick</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','quick')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','quick')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','quick')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','quick')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-wide">
                                     <span>Wide</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','wide')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','wide')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','wide')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','wide')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-skippy">
                                     <span>Skippy</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','skippy')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','skippy')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','skippy')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','skippy')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-echo">
                                     <span>Echo</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','echo')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','echo')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','echo')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','echo')">On</button>
                                     </div>
                                 </div>
                                 <div class="mod-item" id="mod-tf-stomp">
                                     <span>Stomp</span>
                                     <div class="mod-toggles mini">
-                                        <button class="mod-toggle-btn" data-val="off" onclick="setModifier('transform','off','stomp')">Off</button>
-                                        <button class="mod-toggle-btn" data-val="on" onclick="setModifier('transform','on','stomp')">On</button>
+                                        <button class="mod-toggle-btn" data-val="off"
+                                            onclick="setModifier('transform','off','stomp')">Off</button>
+                                        <button class="mod-toggle-btn" data-val="on"
+                                            onclick="setModifier('transform','on','stomp')">On</button>
                                     </div>
                                 </div>
                             </div>
@@ -333,12 +380,18 @@
                         <div class="mod-group" id="mod-effect">
                             <label>Perspective / Effect</label>
                             <div class="mod-toggles wrap">
-                                <button class="mod-toggle-btn" data-val="none" onclick="setModifier('effect','none')">None</button>
-                                <button class="mod-toggle-btn" data-val="drunk" onclick="setModifier('effect','drunk')">Drunk</button>
-                                <button class="mod-toggle-btn" data-val="dizzy" onclick="setModifier('effect','dizzy')">Dizzy</button>
-                                <button class="mod-toggle-btn" data-val="mini" onclick="setModifier('effect','mini')">Mini</button>
-                                <button class="mod-toggle-btn" data-val="flip" onclick="setModifier('effect','flip')">Flip</button>
-                                <button class="mod-toggle-btn" data-val="invert" onclick="setModifier('effect','invert')">Invert</button>
+                                <button class="mod-toggle-btn" data-val="none"
+                                    onclick="setModifier('effect','none')">None</button>
+                                <button class="mod-toggle-btn" data-val="drunk"
+                                    onclick="setModifier('effect','drunk')">Drunk</button>
+                                <button class="mod-toggle-btn" data-val="dizzy"
+                                    onclick="setModifier('effect','dizzy')">Dizzy</button>
+                                <button class="mod-toggle-btn" data-val="mini"
+                                    onclick="setModifier('effect','mini')">Mini</button>
+                                <button class="mod-toggle-btn" data-val="flip"
+                                    onclick="setModifier('effect','flip')">Flip</button>
+                                <button class="mod-toggle-btn" data-val="invert"
+                                    onclick="setModifier('effect','invert')">Invert</button>
                             </div>
                         </div>
                         <p class="mod-tip">Visual effects that distort the playfield.</p>
@@ -354,6 +407,125 @@
                 <div class="spinner"></div>
                 <div class="loading-content"><span id="loading-text">Processing...</span><span id="loading-subtext"
                         style="font-size: 0.8rem; color: #aaa;"></span></div>
+            </div>
+        </div>
+
+        <!-- Floating Help Button -->
+        <button id="help-btn" onclick="openHelp()" title="Help & About">?</button>
+
+        <!-- Help Modal -->
+        <div id="help-modal" class="modal-overlay" style="display:none;">
+            <div class="modal-content help-panel">
+                <div class="mod-header-row">
+                    <h2>Help & About</h2>
+                </div>
+                <div class="help-content-scroll">
+                    <h3>About WebSM</h3>
+                    <p>WebSM is a browser-based emulation of Stepmania (or more exactly, Etterna, considering the
+                        tailored game mechanics)</p>
+                    <p>Version: R1 preview</p>
+
+                    <h3>Why does this exist? </h3>
+                    <p>Well, I was just bored and decided to make a clone of Stepmania, but in the browser.
+                        <br>Yes, I know there are already multiple web-based Stepmania clones, some are even more
+                        well-made than this one. Unfortunately, such clones felt sluggish or outright uncomfortable for
+                        a keyboard player. <br><br>
+                        In case you don't know what Etterna is - it is an actively developed fork of Stepmania,
+                        optimized for keyboard play with lots of improvements. It introduced a lot of new features, most
+                        of which were nigh essential for keyboard players: MSD (difficulty calculation with skillset
+                        breakdown), Wife or MSS (millisecond-based scoring), and a corrected timing window table.
+                        <br> This is created as a solution to the Stepmania developers shitting on OG keyboard players
+                        and ignoring requests for optimazation.
+
+                    </p>
+                    <h3>Controls</h3>
+                    <ul class="help-list">
+                        <li><span class="key-badge">D</span> Left</li>
+                        <li><span class="key-badge">F</span> Down</li>
+                        <li><span class="key-badge">J</span> Up</li>
+                        <li><span class="key-badge">K</span> Right</li>
+                        <li><span class="key-badge">ESC</span> Pause/Back</li>
+                        <li><span class="key-badge">ENTER</span> Confirm</li>
+                    </ul>
+
+                    <h3>Skillset Definitions</h3>
+                    <dl class="help-def-list">
+                        <dt>Stream</dt>
+                        <dd>Continuous stream of notes (usually 1/16ths) without breaks.</dd>
+
+                        <dt>Jumpstream</dt>
+                        <dd>Streams containing jumps (2 notes at once), requiring coordination.</dd>
+
+                        <dt>Handstream</dt>
+                        <dd>Streams containing hands (3 notes at once), testing bracket ability.</dd>
+
+                        <dt>Chordjack</dt>
+                        <dd>Dense, repetitive chord patterns. Often tests reading and physical stamina.</dd>
+
+                        <dt>Technical</dt>
+                        <dd>Note snaps that are considered awkward for the difficulty calculator.</dd>
+
+                        <dt>Stamina</dt>
+                        <dd>The strain of the chart on the player over time.</dd>
+                    </dl>
+
+                    <h3>Terminology</h3>
+                    <dl class="help-def-list">
+                        <dt>NPS (Notes Per Second)</dt>
+                        <dd>Density of the chart. Peak NPS is the highest density reached.</dd>
+
+                        <dt>SSR (Standardized Score Rating)</dt>
+                        <dd>Numerical difficulty value calculated based on note density and patterns.</dd>
+
+                        <dt>MA (Marvelous Attack)</dt>
+                        <dd>Ratio of Marvelous judgments to Perfect judgments.</dd>
+
+                        <dt>PA (Perfect Attack)</dt>
+                        <dd>Ratio of Perfect judgments to Great judgments.</dd>
+
+                        <dt>Simfile</dt>
+                        <dd>The folder containing the song audio and stepchart (.sm/.ssc) file.</dd>
+                    </dl>
+
+                    <h3>Terms of Service</h3>
+                    <div class="tos-box">
+                        <p><strong>1. Usage License</strong><br>
+                            This software is provided "as is" for personal, non-commercial use.</p>
+
+                        <p><strong>2. User Content</strong><br>
+                            You are solely responsible for any content you import. WebSM does not host or distribute any
+                            song files.</p>
+
+                        <p><strong>3. Data Privacy</strong><br>
+                            All processing happens locally in your browser. No data is uploaded to any server. Local
+                            Storage is used to save settings and scores.</p>
+
+                        <p><strong>4. Disclaimer</strong><br>
+                            The developers are not liable for any damages or injuries resulting from the use of this
+                            software. Play safely and take breaks.</p>
+
+                        <p><strong>5. ABSOLUTELY no cheating.</strong><br>
+                            Technically, we cannot detect any form of cheating due to the completely local nature of the
+                            game, but we will not condone it in any shape or form. <br>
+                            Look, I understand the 'justifications' of cheating in competitive/online games, but this?
+                            Seriously? Why do you even waste time cheating on a game that's not even online? Yes, the
+                            dopamine when you get that AAAAA on a 40 rating chart is real, but when it passes, what is
+                            the point? <br>
+                            <br>
+                            I get that you want to show off your skills, but again, what is the point anyways?
+                            <br>
+                            Don't even think of using Autoplay to fake scores. We have already accounted for that and
+                            had pushed extreme scoring penalties to prevent it.
+                        </p>
+                    </div>
+
+                    <p style="text-align:center; color:#666; font-size:0.8rem; margin-top:20px;">&copy; 2026 WebSM Team
+                        <br> Created by Lyss
+                    </p>
+                </div>
+                <div class="settings-footer">
+                    <button class="close-btn" onclick="closeHelp()">Close</button>
+                </div>
             </div>
         </div>
 
@@ -435,7 +607,7 @@
                 <div id="error-bar-container">
                     <div id="error-bar-center"></div>
                     <canvas id="errorBarCanvas" width="300" height="20"></canvas>
-                    <div id="hit-mean">Mean: 0.00ms</div>
+                    <div id="hit-mean">0.00ms</div>
                 </div>
             </div>
 
@@ -457,7 +629,8 @@
                 <img id="res-banner" src="" alt="" style="display:none;">
                 <div class="res-song-info">
                     <h1 id="res-song-title">Title</h1>
-                    <h2 id="res-song-artist">Artist <span id="res-rate-display" style="display:none; font-size: 0.8em; color: #ffcc00; margin-left:10px;">(1.0x)</span></h2>
+                    <h2 id="res-song-artist">Artist <span id="res-rate-display"
+                            style="display:none; font-size: 0.8em; color: #ffcc00; margin-left:10px;">(1.0x)</span></h2>
                 </div>
                 <div class="res-grade-box"></div>
             </div>
