@@ -94,6 +94,65 @@ function parseSM(text) {
     return { meta, charts };
 }
 
+function parseSSC(text) {
+    const charts = [];
+    const meta = {};
+    text = text.replace(/\/\/.*$/mg, '');
+
+    const getTag = (block, tag) => {
+        // Use [\s\S]*? to match any character including newlines, non-greedy until ;
+        const match = block.match(new RegExp(`#${tag}:([\\s\\S]*?);`, 'i'));
+        return match ? match[1].trim() : null;
+    };
+
+    meta.title = getTag(text, 'TITLE') || "Unknown";
+    meta.artist = getTag(text, 'ARTIST') || "Unknown";
+    meta.music = getTag(text, 'MUSIC');
+    meta.banner = getTag(text, 'BANNER');
+    meta.background = getTag(text, 'BACKGROUND');
+    meta.cdtitle = getTag(text, 'CDTITLE');
+    meta.subtitle = getTag(text, 'SUBTITLE') || "";
+    meta.offset = parseFloat(getTag(text, 'OFFSET')) || 0;
+
+    const bpmMatch = text.match(/#BPMS:([\s\S]*?);/i);
+    meta.bpms = bpmMatch ? bpmMatch[1].trim().split(',').map(b => {
+        const p = b.split('=');
+        return { beat: parseFloat(p[0]), value: parseFloat(p[1]) };
+    }) : [{ beat: 0, value: 120 }];
+
+    // SSC separates charts with #NOTEDATA:;
+    const chartBlocks = text.split(/#NOTEDATA:;/i);
+    chartBlocks.shift(); // Remove global/header block
+
+    console.log(`[SSC] Found ${chartBlocks.length} chart blocks.`);
+
+    chartBlocks.forEach((block, i) => {
+        const type = getTag(block, 'STEPSTYPE');
+        const diff = getTag(block, 'DIFFICULTY');
+
+        // console.log(`[SSC] Block ${i} Type: ${type}, Diff: ${diff}`);
+
+        if (type && type.toLowerCase().includes('dance-single')) {
+            const difficulty = diff || "Edit";
+            const meter = getTag(block, 'METER') || "1";
+            const notesRaw = getTag(block, 'NOTES');
+
+            if (notesRaw) {
+                charts.push({
+                    difficulty: difficulty,
+                    meter: meter,
+                    notes: parseNoteData(notesRaw.trim(), meta.bpms, meta.offset)
+                });
+                console.log(`[SSC] Parsed chart: ${difficulty} (${meter})`);
+            } else {
+                console.warn(`[SSC] Block ${i} matched type but no NOTES tag found.`);
+            }
+        }
+    });
+
+    return { meta, charts };
+}
+
 function parseNoteData(data, bpms, songOffset) {
     const measures = data.split(',');
     const notes = [];
@@ -134,6 +193,80 @@ function parseNoteData(data, bpms, songOffset) {
         currentBeat += 4;
     });
     return notes.sort((a, b) => a.time - b.time);
+}
+
+
+/* =========================================
+   MODIFIER LOGIC (TRANSFORMS)
+   ========================================= */
+function applyChartTransforms(originalNotes) {
+    if (!modConfig) return originalNotes;
+
+    // 1. Clone Notes (Shallow copy of objects is safest if we mutate, but we usually re-create if changing col)
+    // We map to new objects to be safe.
+    let notes = originalNotes.map(n => ({ ...n }));
+
+    // 2. Inserts / Removes
+    const tf = modConfig.transform;
+    if (tf) {
+        if (tf.noMines) notes = notes.filter(n => n.type !== 'mine');
+        if (tf.noHolds) notes = notes.filter(n => n.type !== 'hold'); // Converts to tap? Or removes? SM removes.
+        if (tf.noRolls) notes = notes.filter(n => n.type !== 'roll');
+        if (tf.noHands) {
+            // Remove notes that make >2 simultaneous presses? or >1? 
+            // "No Hands" usually means max 2 arrows at once (no 3 or 4).
+            // Simplification: Group by time, if > 2, remove excess? 
+            // For now, let's skip complex "No Hands" logic and focus on singular removes.
+        }
+        if (tf.noJumps) {
+            // Remove jumps (2 simultaneous). Keep one?
+            // Group by time. If count > 1, keep only first.
+            const timeMap = new Map();
+            notes.forEach(n => {
+                if (!timeMap.has(n.time)) timeMap.set(n.time, []);
+                timeMap.get(n.time).push(n);
+            });
+            const newNotes = [];
+            timeMap.forEach(group => {
+                if (group.length > 1) {
+                    // Keep only one (e.g. lowest val col, or random)
+                    newNotes.push(group[0]);
+                } else {
+                    newNotes.push(group[0]);
+                }
+            });
+            notes = newNotes; // Sorted by time implicitly if map insertion order preserved (mostly yes for sorted input)
+            notes.sort((a, b) => a.time - b.time);
+        }
+        if (tf.little) {
+            // Keep only 4th notes (Beat % 1 === 0)
+            // Epsilon for float precision
+            notes = notes.filter(n => {
+                const b = n.beat;
+                return Math.abs(b - Math.round(b)) < 0.01;
+            });
+        }
+    }
+
+    // 3. Turns
+    const turn = modConfig.turn;
+    if (turn && turn !== 'none') {
+        let mapping = [0, 1, 2, 3];
+        if (turn === 'mirror') mapping = [3, 2, 1, 0];
+        else if (turn === 'left') mapping = [1, 2, 3, 0]; // Left: Right->Up, Up->Left... Rotation
+        else if (turn === 'right') mapping = [3, 0, 1, 2];
+        else if (turn === 'shuffle') {
+            // Deterministic shuffle for this session? Or random?
+            // Standard JS shuffle
+            mapping = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+        }
+
+        notes.forEach(n => {
+            n.col = mapping[n.col];
+        });
+    }
+
+    return notes;
 }
 
 /* =========================================
@@ -540,7 +673,9 @@ function selectDifficulty(chartIndex) {
             setText('bs-acc', accText + "%");
 
             setText('bs-ssr', (top.ssr || 0).toFixed(2));
-            setText('bs-clear', top.fcType || "");
+            // Recalculate FC Type to match latest logic (BF/FC changes)
+            const calculatedFC = top.judgments ? getFCType(top.judgments) : (top.fcType || "");
+            setText('bs-clear', calculatedFC);
 
             // Judge Grid
             if (jGrid) {
@@ -583,6 +718,11 @@ function selectDifficulty(chartIndex) {
 function calculateDetailedDifficulty(notes) {
     if (!notes || notes.length === 0) return { overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0, nps: 0, peak: 0 };
 
+    // Rate Mod: Scale logic by rate
+    // We'll use the global modConfig.rate if available
+    let rate = 1.0;
+    if (typeof modConfig !== 'undefined' && modConfig.rate) rate = modConfig.rate;
+
     const rows = [];
     let currentRow = { time: notes[0].time, notes: [] };
     for (let note of notes) {
@@ -615,16 +755,12 @@ function calculateDetailedDifficulty(notes) {
         const nps = noteCount / windowSize;
         if (nps > maxNPS) maxNPS = nps;
 
-        // Rate Mod: Scale NPS/Density logic if we wanted "perceived" difficulty, but usually difficulty is chart-intrinsic.
-        // We'll leave difficulty calc as "native chart speed".
-
-
-        let sStr = nps; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
-        let sJs = nps; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
+        let sStr = nps * rate; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
+        let sJs = nps * rate; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
         if (jumpRatio < 0.2) sJs *= 0.2; else sJs *= (0.8 + jumpRatio * 0.4); jsStrains.push(sJs);
-        let sHs = 0; if (handCount > 0) { sHs = nps * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
-        let sCj = 0; if (chordCount > 0 && jackCount > 0) { sCj = nps * 0.8 + (jackCount * 1.5) + (chordCount * 1.0); } cjStrains.push(sCj);
-        let sTech = nps * 0.4 + (jackCount * 2.5); techStrains.push(sTech);
+        let sHs = 0; if (handCount > 0) { sHs = (nps * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
+        let sCj = 0; if (chordCount > 0 && jackCount > 0) { sCj = (nps * rate) * 0.8 + (jackCount * 1.5) + (chordCount * 1.0); } cjStrains.push(sCj);
+        let sTech = (nps * rate) * 0.4 + (jackCount * 2.5); techStrains.push(sTech);
 
         windowStart += 0.5;
         while (windowIndex < rows.length && rows[windowIndex].time < windowStart) windowIndex++;
@@ -639,16 +775,16 @@ function calculateDetailedDifficulty(notes) {
 
     const sStream = aggregate(streamStrains); const sJS = aggregate(jsStrains); const sHS = aggregate(hsStrains);
     const sCJ = aggregate(cjStrains); const sTech = aggregate(techStrains);
-    const duration = rows[rows.length - 1].time - rows[0].time;
+    const duration = (rows[rows.length - 1].time - rows[0].time) / rate;
 
-    const denseThreshold = maxNPS * 0.5;
+    const denseThreshold = maxNPS * rate * 0.5;
     const denseStrains = streamStrains.filter(s => s > denseThreshold);
     const avgDense = denseStrains.length > 0 ? denseStrains.reduce((a, b) => a + b, 0) / denseStrains.length : 0;
     let sStamina = avgDense * (1 + Math.log10(Math.max(1, duration / 60)));
 
     const scale = (val) => { return 45 * (1 - Math.exp(-val / 25)); };
     let result = {
-        nps: notes.length / duration, peak: maxNPS, stream: scale(sStream), jumpstream: scale(sJS),
+        nps: (notes.length / duration), peak: maxNPS * rate, stream: scale(sStream), jumpstream: scale(sJS),
         handstream: scale(sHS), chordjack: scale(sCJ), technical: scale(sTech), stamina: scale(sStamina)
     };
     const skills = [result.stream, result.jumpstream, result.handstream, result.chordjack, result.technical, result.stamina];
@@ -657,6 +793,12 @@ function calculateDetailedDifficulty(notes) {
     result.overall = overall;
     return result;
 }
+
+window.onRateChange = (newRate) => {
+    if (selectedChartIndex !== -1) {
+        selectDifficulty(selectedChartIndex);
+    }
+};
 
 let currentPreviewAudio = null;
 
@@ -735,8 +877,21 @@ async function startGameFromMenu() {
             document.getElementById('loading-status').style.display = 'none';
 
             // Calc for stats
-            const difficultyCalc = calculateDetailedDifficulty(chart.notes);
-            initGame(chart, decoded, song.meta, difficultyCalc);
+            let finalNotes = chart.notes;
+
+            // --- APPLY LINEAR TRANSFORMS (Turn, Remove, Insert) ---
+            if (typeof applyChartTransforms === 'function') {
+                finalNotes = applyChartTransforms(chart.notes);
+            }
+
+            const difficultyCalc = calculateDetailedDifficulty(finalNotes);
+
+            // Pass modified chart clone to initGame
+            // We clone chart to avoid mutating the library version permanently? 
+            // Actually chart.notes is referenced. applyChartTransforms should return a NEW array.
+            const gameChart = { ...chart, notes: finalNotes };
+
+            initGame(gameChart, decoded, song.meta, difficultyCalc);
         } catch (e) {
             console.error("Error decoding audio: " + e.message);
             document.getElementById('loading-status').style.display = 'none';
@@ -907,10 +1062,22 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         if (isMiss) {
             judgeText = "MISS"; judgeClass = "judge-miss"; breaksCombo = true; gameState.judgments.miss++; lifeChange = -8.0;
         } else {
-            if (absOffset <= J_MARVELOUS) { judgeText = "MARVELOUS"; judgeClass = "judge-marvelous"; scoreAdd = baseNoteScore; gameState.judgments.marvelous++; lifeChange = 0.8; }
-            else if (absOffset <= J_PERFECT) { judgeText = "PERFECT"; judgeClass = "judge-perfect"; scoreAdd = baseNoteScore - 10; gameState.judgments.perfect++; lifeChange = 0.8; }
-            else if (absOffset <= J_GREAT) { judgeText = "GREAT"; judgeClass = "judge-great"; scoreAdd = (baseNoteScore - 10) * 0.6; gameState.judgments.great++; lifeChange = 0.4; }
-            else if (absOffset <= J_GOOD) { judgeText = "GOOD"; judgeClass = "judge-good"; breaksCombo = true; scoreAdd = (baseNoteScore - 10) * 0.2; gameState.judgments.good++; lifeChange = 0.0; }
+            if (absOffset <= J_MARVELOUS) {
+                judgeText = "MARVELOUS"; judgeClass = "judge-marvelous"; breaksCombo = false;
+                scoreAdd = baseNoteScore; gameState.judgments.marvelous++; lifeChange = 0.8;
+            }
+            else if (absOffset <= J_PERFECT) {
+                judgeText = "PERFECT"; judgeClass = "judge-perfect"; breaksCombo = false;
+                scoreAdd = baseNoteScore - 10; gameState.judgments.perfect++; lifeChange = 0.8;
+            }
+            else if (absOffset <= J_GREAT) {
+                judgeText = "GREAT"; judgeClass = "judge-great"; breaksCombo = false; // User Request: Do not break combo
+                scoreAdd = (baseNoteScore - 10) * 0.6; gameState.judgments.great++; lifeChange = 0.4;
+            }
+            else if (absOffset <= J_GOOD) {
+                judgeText = "GOOD"; judgeClass = "judge-good"; breaksCombo = true;
+                scoreAdd = (baseNoteScore - 10) * 0.2; gameState.judgments.good++; lifeChange = 0.0;
+            }
             else if (absOffset <= J_BAD) { judgeText = "BAD"; judgeClass = "judge-bad"; breaksCombo = true; gameState.judgments.bad++; lifeChange = -4.0; }
             else { judgeText = "MISS"; judgeClass = "judge-miss"; breaksCombo = true; gameState.judgments.miss++; lifeChange = -8.0; }
         }
@@ -1205,11 +1372,29 @@ function drawAccuracyGraph() {
 }
 
 function getFCType(j) {
-    if (j.miss > 0 || j.bad > 0 || j.ng > 0) return "Clear"; // Not an FC (or just Clear if passed)
-    if (j.good > 0) return "FC";
-    if (j.great > 0) return "GFC";
-    if (j.perfect > 0) return "PFC";
-    return "MFC";
+    const cb = j.miss + j.bad + j.good + j.ng;
+
+    // FULL COMBO
+    if (cb === 0) {
+        if (j.great === 0 && j.perfect === 0) return "MFC";
+
+        // Perfect Full Combo Tier
+        if (j.great === 0) {
+            if (j.perfect === 1) return "WF"; // White Flag (1 Perfect)
+            if (j.perfect < 10) return "SDP"; // Single Digit Perfects
+            return "PFC";
+        }
+
+        // Great Full Combo Tier
+        if (j.great === 1) return "BF";  // Black Flag (1 Great)
+        if (j.great < 10) return "SDG";  // Single Digit Greats
+        return "FC";
+    }
+
+    // BROKEN COMBO
+    if (cb === 1) return "MF";   // Miss Flag (1 Combo Break)
+    if (cb < 10) return "SDCB";  // Single Digit Combo Breaks
+    return "Clear";
 }
 
 function handleLeaderboard() {
@@ -1393,16 +1578,224 @@ function drawReceptor(x, y, rotation, colIndex) {
     }
     ctx.restore();
 }
+// Refactored drawNote with Alpha Fade & Alignment & Modifiers
 function drawNote(note, y, rotation) {
-    ctx.save(); const halfSize = gameConfig.columnWidth / 2; const x = note.col * gameConfig.columnWidth; if ((note.type === 'hold' || note.type === 'roll') && note.endTime) { let tailY; const duration = note.endTime - note.time; let dist = duration * gameConfig.scrollSpeed; if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist; let drawHeadY = y; let drawTailY = tailY; if (note.holdState === 'active') { drawHeadY = gameConfig.receptorY; } const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody; const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody; if (bodyLoaded) { ctx.save(); ctx.beginPath(); const w = gameConfig.arrowSize; const bx = x + (gameConfig.columnWidth - w) / 2; let ry = userConfig.downScroll ? drawTailY : drawHeadY; let rh = Math.abs(drawHeadY - drawTailY); ctx.rect(bx, ry, w, rh); ctx.clip(); const scale = w / bodyImg.width; const sHeight = bodyImg.height * scale; const count = Math.ceil(rh / sHeight) + 1; const scrollOffset = (Date.now() / 10) % sHeight; for (let k = -1; k < count; k++) { ctx.drawImage(bodyImg, bx, ry + (k * sHeight) - scrollOffset, w, sHeight); } ctx.restore(); } } ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2;
+    // --- MODIFIERS: EFFECT & APPEARANCE ---
+    let drawX = note.col * gameConfig.columnWidth;
+    let drawY = y;
+    let alpha = 1.0;
+
+    // 1. Appearance (Hidden/Sudden/Stealth)
+    if (modConfig.appearance) {
+        const type = modConfig.appearance.type;
+        const offsetPct = modConfig.appearance.offset || 50;
+        const offsetVal = offsetPct / 100;
+
+        // Calculate relative position 0..1 (0 = Receptor, 1 = Bottom/Top of screen)
+        // This depends on scroll direction and arrow Y relative to receptor.
+        // Simple approx: Distance from receptor in pixels.
+        const dist = Math.abs(y - gameConfig.receptorY);
+        const screenH = canvas.height;
+
+        if (type === 'stealth') {
+            alpha = 0;
+        } else if (type === 'hidden') {
+            // Fade out as it gets closer. 
+            // Visible at distance, invisible at receptor.
+            // Fade start: offsetVal * screenH. Fade End: Receptor.
+            const fadePoint = offsetVal * (screenH * 0.5) + 50; // Scaling
+            if (dist < fadePoint) {
+                alpha = dist / fadePoint;
+            }
+        } else if (type === 'sudden') {
+            // Invisible at distance, fade in near receptor.
+            const fadePoint = offsetVal * (screenH * 0.5) + 50;
+            if (dist > fadePoint) alpha = 0;
+            else {
+                // Fade in: dist 0 = alpha 1. dist fadePoint = alpha 0.
+                alpha = 1 - (dist / fadePoint);
+            }
+        }
+    }
+
+    // 2. Effects (Drunk, etc)
+    if (modConfig.effect && modConfig.effect.name !== 'none') {
+        const eff = modConfig.effect.name;
+        // Time based: currentSongTime (beat would be better)
+        // We need audioCtx time.
+        const time = audioCtx ? (audioCtx.currentTime - gameState.startTime) : 0;
+
+        if (eff === 'drunk') {
+            // Sine wave on X
+            // Phase based on time + y position (to create wave)
+            drawX += Math.cos(time * 3 + y * 0.01) * (gameConfig.columnWidth * 0.5);
+        } else if (eff === 'dizzy') {
+            // Rotation?
+            // "Dizzy" usually spins the arrows.
+            // Note: `rotation` arg is already 0, 90, 180, 270.
+            // We'll add to it.
+            // rotation += time * 100; // Spin
+            // But we can't easily modify rotation var without affecting logic below (ctx.rotate).
+            // We'll add a `extraRotation` var.
+            rotation += (time * 100) % 360;
+        } else if (eff === 'mini') {
+            // Handled via scale in draw?
+            // We'll scale context later.
+        } else if (eff === 'flip') {
+            // Invert columns visually? 
+            // Logic: 0->3, 1->2...
+            // But drawX is already calc'd.
+            // X = (3 - col) * width
+            drawX = (3 - note.col) * gameConfig.columnWidth;
+        } else if (eff === 'invert') {
+            // 0->1, 1->0, 2->3, 3->2
+            // Col mapping logic
+            const map = [1, 0, 3, 2];
+            drawX = map[note.col] * gameConfig.columnWidth;
+        }
+    }
+
+    ctx.save();
+    ctx.globalAlpha *= alpha; // Combine with existing alpha if any
+
+    const halfSize = gameConfig.columnWidth / 2;
+    const x = drawX; // Use modified X
+
+    // Mini Effect Scale
+    if (modConfig.effect && modConfig.effect.name === 'mini') {
+        // Center scale around the arrow center?
+        // Translate to arrow center, scale, translate back?
+        // We already translate to center later.
+        // Easier: adjust drawSize.
+    }
+
+    // --- HOLD/ROLL BODY DRAWING ---
+    if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
+        let tailY;
+        const duration = note.endTime - note.time;
+        // Need to account for potential rate mod logic if scrollSpeed is constant time?
+        // gameConfig.scrollSpeed is pixels/sec. 
+        let dist = duration * gameConfig.scrollSpeed;
+        if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist;
+
+        let drawHeadY = y;
+        let drawTailY = tailY;
+
+        // Lock Head to Receptor if Active
+        if (note.holdState === 'active') {
+            drawHeadY = gameConfig.receptorY;
+        }
+
+        // EFFECT: Apply Drunk to Hold Body?
+        // Complex. For now, Drunk shifts the WHOLE column, so yes X shifts.
+        // But drawing hold body usually requires straight rect.
+        // If Drunk is active, hold body should look wavy?
+        // Too expensive to draw wavy hold body with current rect implementation.
+        // We'll just shift the rect X based on Head X.
+
+        // Also check Visibility for Hold Body
+        // If Sudden, head might be visible but tail invisible?
+        // Using global alpha for whole note for simplicity.
+
+        const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody;
+        const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody;
+
+        if (bodyLoaded) {
+            ctx.save();
+
+            // Alpha Fading Logic (Grace Period)
+            if (note.letGoTime) {
+                const timeStr = (audioCtx ? audioCtx.currentTime - gameState.startTime : 0) - note.letGoTime;
+                const ms = timeStr * 1000;
+                const graceAlpha = Math.max(0, 1 - (ms / 250));
+                ctx.globalAlpha *= graceAlpha;
+            }
+
+            ctx.beginPath();
+            const w = gameConfig.arrowSize; // * (mini ? 0.5 : 1)
+            const bx = x + (gameConfig.columnWidth - w) / 2;
+
+            // Determine Rect
+            let ry = userConfig.downScroll ? drawTailY : drawHeadY;
+            let rh = Math.abs(drawHeadY - drawTailY);
+
+            // Clip & Draw
+            ctx.rect(bx, ry, w, rh);
+            ctx.clip();
+
+            const scale = w / bodyImg.width;
+            const sHeight = bodyImg.height * scale;
+            const count = Math.ceil(rh / sHeight) + 1;
+            const scrollOffset = (Date.now() / 10) % sHeight;
+
+            for (let k = -1; k < count; k++) {
+                ctx.drawImage(bodyImg, bx, ry + (k * sHeight) - scrollOffset, w, sHeight);
+            }
+            ctx.restore();
+        }
+    }
+
+    // --- HEAD DRAWING ---
+    // Use modified x, y, rotation
+    ctx.translate(x + halfSize, y + halfSize);
+    ctx.rotate(rotation * Math.PI / 180);
+
+    // Scale for Mini
+    if (modConfig.effect && modConfig.effect.name === 'mini') {
+        ctx.scale(0.5, 0.5);
+    }
+
+    const drawSize = gameConfig.arrowSize;
+    const offset = -drawSize / 2;
+
     if (note.type === 'mine' && assets.loaded.mineSprite) {
         const frames = 8;
         const frame = Math.floor(gameState.globalFrame / 10) % frames;
-        // Fix: Horizontal Sprite Sheet (8x1)
         const fw = assets.mineSprite.width / 8;
         const fh = assets.mineSprite.height;
         ctx.drawImage(assets.mineSprite, frame * fw, 0, fw, fh, offset, offset, drawSize, drawSize);
-    } else { let img = assets.arrowSprite; let rowIndex = getNoteRowIndex(note.beat); if (note.holdState === 'active' && assets.loaded.holdHeadActive) { img = assets.holdHeadActive; } if (assets.loaded.arrowSprite) { const sy = rowIndex * (img.height / 8); ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize); } else { ctx.fillStyle = '#fff'; ctx.fillRect(offset, offset, drawSize, drawSize); } } ctx.restore();
+    } else {
+        let img = assets.arrowSprite;
+        let rowIndex = getNoteRowIndex(note.beat);
+
+        // Active Head Overriding
+        if (note.holdState === 'active' && assets.loaded.holdHeadActive) {
+            img = assets.holdHeadActive;
+
+            // Re-lock to Receptor Y if active
+            // Undo Effect Translation? 
+            // If we are active, we are AT the receptor.
+            // Receptor X is fixed (unless Drunk moves receptors too? usually receptors stay put or move with mod).
+            // If mod moves Receptors, we should move.
+            // If mod only moves Arrows (Visual), then when active (at receptor), we should match Receptor visual.
+            // Assuming Receptors NOT transformed for now.
+            // Force Y to ReceptorY. X to Standard Col X? Or Mod X?
+            // If Drunk, Arrow sways. Receptor static. When crossing, arrow should align?
+            // Usually Drunk moves receptors too given "Column" movement.
+            // Let's assume Drunk moves note X only.
+
+            ctx.restore(); // Undo translate/rotate
+            ctx.save();
+            ctx.globalAlpha *= alpha;
+
+            // Recalculate X for Receptor (Static)
+            // Or should we keep Drunk offset?
+            // Let's keep Drunk offset for visual consistency.
+
+            ctx.translate(x + halfSize, gameConfig.receptorY + halfSize);
+            ctx.rotate(rotation * Math.PI / 180);
+            if (modConfig.effect && modConfig.effect.name === 'mini') ctx.scale(0.5, 0.5);
+        }
+
+        if (assets.loaded.arrowSprite) {
+            const sy = rowIndex * (img.height / 8);
+            ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize);
+        } else {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(offset, offset, drawSize, drawSize);
+        }
+    }
+    ctx.restore();
 }
 function drawErrorBar() { const eb = document.getElementById('errorBarCanvas'); if (!eb) return; const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height); const scale = 150 / 180; const now = Date.now(); gameState.recentHits = gameState.recentHits.filter(h => now - h.time < 2000); gameState.recentHits.forEach(h => { const x = 150 - (h.offset * scale); const age = now - h.time; const alpha = 1 - (age / 2000); let color = "255, 255, 255"; const abs = Math.abs(h.offset); if (abs <= J_MARVELOUS) color = "163, 247, 255"; else if (abs <= J_PERFECT) color = "255, 230, 0"; else if (abs <= J_GREAT) color = "68, 255, 75"; else if (abs <= J_GOOD) color = "0, 153, 255"; else if (abs <= J_BAD) color = "170, 0, 255"; else color = "255, 51, 51"; eCtx.fillStyle = `rgba(${color}, ${alpha})`; eCtx.fillRect(x - 1, 0, 3, 20); }); const offsets = gameState.hitOffsets; if (offsets.length > 0) { const sum = offsets.reduce((a, b) => a + b, 0); const mean = sum / offsets.length; setText('hit-mean', `${mean.toFixed(2)}ms`); } }
 function drawNPSGraph() {
@@ -1521,31 +1914,51 @@ function gameLoop() {
     }
 
     // Process & Draw Visible Notes
+    // Process & Draw Visible Notes
     visibleNotes.forEach(note => {
+        // --- HOLD LOGIC ---
+        // If the note is a hold/roll that was hit (triggered active)
         if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+
+            // 1. Check if finalized (reached end)
             if (currentTime >= note.endTime) {
                 note.holdState = 'ok';
-                triggerHoldJudgement(note, true);
+                triggerHoldJudgement(note, true); // Trigger OK judgment
                 return;
             }
+
+            // 2. Check input status
             const keyHeld = gameState.heldKeys[note.col];
+
             if (note.type === 'hold') {
                 if (!keyHeld) {
-                    if (!note.letGoTime) note.letGoTime = currentTime;
+                    // Key released! Start grace period logic.
+                    if (!note.letGoTime) {
+                        note.letGoTime = currentTime; // Record when let go
+                    }
+
+                    // Check if grace period expired (250ms)
                     if ((currentTime - note.letGoTime) * 1000 > 250) {
                         note.holdState = 'ng';
-                        triggerHoldJudgement(note, false);
+                        triggerHoldJudgement(note, false); // Fail
                     }
-                } else { note.letGoTime = null; }
-            }
-            if (note.type === 'roll') {
-                const timeSincePress = (currentTime - note.lastPressTime) * 1000;
-                if (timeSincePress > 500) {
+                } else {
+                    // Key IS held.
+                    // If we were in grace period (letGoTime set), we recovered!
+                    note.letGoTime = null;
+                }
+            } else if (note.type === 'roll') {
+                // Roll logic: check time since last press
+                // If lastPressTime is very old (> 500ms default for rolls? user configurable usually)
+                // Note: roll inputs update note.lastPressTime in handleInput
+                const limit = 0.5; // 500ms roll window
+                if ((currentTime - note.lastPressTime) > limit) {
                     note.holdState = 'ng';
                     triggerHoldJudgement(note, false);
                 }
             }
         }
+
         if (note.processed && note.holdState !== 'active') return;
 
         const timeDiff = note.time - currentTime;
@@ -2078,10 +2491,10 @@ const statusDiv = document.getElementById('loading-status');
 
 fileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
-    // Filter for SM/SSC files
-    const smFiles = files.filter(f => f.name.toLowerCase().endsWith('.sm') || f.name.toLowerCase().endsWith('.ssc'));
+    // Find all definition files
+    const defFiles = files.filter(f => f.name.toLowerCase().endsWith('.sm') || f.name.toLowerCase().endsWith('.ssc'));
 
-    if (smFiles.length === 0) { alert("No .sm or .ssc files found."); return; }
+    if (defFiles.length === 0) { alert("No .sm or .ssc files found."); return; }
 
     setScreen('loading-status');
     statusDiv.style.display = 'block';
@@ -2089,112 +2502,139 @@ fileInput.addEventListener('change', async (e) => {
     let loadedCount = 0;
     let selectedSongIndex = -1;
 
+    // Group by folder
+    const songGroups = {};
+    for (const f of defFiles) {
+        const fullPath = f.webkitRelativePath || f.name;
+        const pathParts = fullPath.split('/');
+        pathParts.pop();
+        const rootPath = pathParts.join('/');
+
+        if (!songGroups[rootPath]) songGroups[rootPath] = [];
+        songGroups[rootPath].push(f);
+    }
+
     try {
-        for (let i = 0; i < smFiles.length; i++) {
-            const smFile = smFiles[i];
-            setText('loading-text', `Importing Songs (${i + 1}/${smFiles.length})`);
+        const groupKeys = Object.keys(songGroups);
+        for (let i = 0; i < groupKeys.length; i++) {
+            const rootPath = groupKeys[i];
+            const groupDefs = songGroups[rootPath];
+            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length})`);
 
-            const text = await smFile.text();
-            const parsedData = parseSM(text);
+            let combinedMeta = null;
+            let combinedCharts = [];
 
-            // Determine root path for this song (from the SM file's path)
-            // webkitRelativePath example: "Pack/SongFolder/song.sm" -> root: "Pack/SongFolder"
-            const fullPath = smFile.webkitRelativePath || smFile.name;
-            const pathParts = fullPath.split('/');
-            pathParts.pop(); // remove filename
-            const rootPath = pathParts.join('/');
+            // Should usually be 1 SM and 1 SSC, or just 1 of either.
+            // Parse all and merge.
+            for (const defFile of groupDefs) {
+                const text = await defFile.text();
+                let parsed = null;
+                const isSSC = defFile.name.toLowerCase().endsWith('.ssc');
+
+                if (isSSC) {
+                    console.log(`[Upload] Parsing SSC: ${defFile.name}`);
+                    parsed = parseSSC(text);
+                } else {
+                    parsed = parseSM(text);
+                }
+
+                if (parsed) {
+                    // If we don't have meta yet, take it. 
+                    // If we do, and this is SSC, overwrite (SSC usually preferred).
+                    if (!combinedMeta || isSSC) {
+                        combinedMeta = parsed.meta;
+                    }
+                    if (parsed.charts) {
+                        combinedCharts = combinedCharts.concat(parsed.charts);
+                    }
+                }
+            }
+
+            if (!combinedMeta) continue;
 
             const findFileInFolder = (name, type) => {
-                // type: 'banner', 'background', 'audio', etc. (for fallbacks)
                 const normalize = (p) => p.replace(/\\/g, '/').toLowerCase();
+                const cleanName = (n) => n.split('/').pop().toLowerCase();
+                const baseName = (n) => { const c = cleanName(n); return c.substring(0, c.lastIndexOf('.')) || c; };
 
-                // 1. If name is provided, try specific matching
                 if (name) {
                     const targetPath = normalize(rootPath ? `${rootPath}/${name}` : name);
-                    const targetNameVal = name.split('/').pop().toLowerCase();
-                    const targetBase = targetNameVal.substring(0, targetNameVal.lastIndexOf('.')) || targetNameVal;
+                    const targetBase = baseName(name);
 
-                    // A. Exact Path Match
+                    // A. Exact Path
                     let found = files.find(f => normalize(f.webkitRelativePath || f.name) === targetPath);
                     if (found) return found;
 
-                    // B. Filename Match in same folder (ignore extension mismatch)
-                    // Iterate files in the root folder
+                    // B. Filename/Basename Match in same folder
                     found = files.find(f => {
                         const fPath = normalize(f.webkitRelativePath || f.name);
                         const fDir = fPath.substring(0, fPath.lastIndexOf('/'));
                         if (fDir !== normalize(rootPath)) return false;
-
-                        const fName = fPath.split('/').pop();
-                        const fBase = fName.substring(0, fName.lastIndexOf('.')) || fName;
-
-                        // Check full filename match OR basename match
-                        // Priority to full filename match but we already checked exact path.
-                        // So here we check if base name matches (e.g. banner.png vs banner.bmp)
-                        return fBase === targetBase;
+                        return baseName(fPath) === targetBase;
                     });
                     if (found) return found;
                 }
 
-                // 2. Fallbacks if name not found or not provided
                 if (type) {
                     const candidates = [];
                     if (type === 'banner') candidates.push('banner', 'bn', 'in');
                     if (type === 'background') candidates.push('bg', 'background', 'back');
                     if (type === 'cdtitle') candidates.push('cdtitle', 'cd');
 
-                    const extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif'];
-
                     for (let cand of candidates) {
                         const found = files.find(f => {
                             const fPath = normalize(f.webkitRelativePath || f.name);
-                            const lastSlash = fPath.lastIndexOf('/');
-                            const fDir = lastSlash === -1 ? "" : fPath.substring(0, lastSlash);
-
-                            // Loose check: ensure it is inside the rootPath
-                            // Actually, normalize(rootPath) should be strict equality for folder import
+                            const fDir = fPath.substring(0, fPath.lastIndexOf('/'));
                             if (fDir !== normalize(rootPath)) return false;
-
-                            const fName = fPath.split('/').pop();
-                            const fBase = fName.substring(0, fName.lastIndexOf('.')) || fName;
-                            return fBase === cand;
+                            return baseName(fPath) === cand;
                         });
                         if (found) return found;
                     }
                 }
-
-                console.log(`[AssetDebug] Failed to find ${type || 'file'} for ${name || 'unknown'}. Root: ${rootPath}`);
                 return null;
             };
 
-            const bannerFile = findFileInFolder(parsedData.meta.banner, 'banner');
-            const bgFile = findFileInFolder(parsedData.meta.background, 'background');
-            const cdFile = findFileInFolder(parsedData.meta.cdtitle, 'cdtitle');
-            let audioFile = findFileInFolder(parsedData.meta.music);
+            const bannerFile = findFileInFolder(combinedMeta.banner, 'banner');
+            const bgFile = findFileInFolder(combinedMeta.background, 'background');
+            const cdFile = findFileInFolder(combinedMeta.cdtitle, 'cdtitle');
+            let audioFile = findFileInFolder(combinedMeta.music);
 
-            // Heuristic for audio if not found explicitly
             if (!audioFile) {
-                // Look for likely audio files in the same folder
                 const extensions = ['.ogg', '.mp3', '.wav'];
                 audioFile = files.find(f => {
                     const fPath = f.webkitRelativePath || f.name;
                     const fDir = fPath.substring(0, fPath.lastIndexOf('/'));
                     const fName = fPath.split('/').pop().toLowerCase();
-                    return normalizePath(fDir) === normalizePath(rootPath) && extensions.some(ext => fName.endsWith(ext));
+                    const normalize = (p) => p.replace(/\\/g, '/').toLowerCase();
+                    return normalize(fDir) === normalize(rootPath) && extensions.some(ext => fName.endsWith(ext));
                 });
             }
 
-            // Helper for normalization inside the loop
-            function normalizePath(p) { return p ? p.replace(/\\/g, '/').toLowerCase() : ""; }
-
             if (!audioFile) {
-                console.warn(`Audio not found for ${parsedData.meta.title}, skipping.`);
+                console.warn(`Audio not found for ${combinedMeta.title}, skipping.`);
                 continue;
             }
 
+            // Deduplicate charts if needed? 
+            // SSC might contain same charts as SM. 
+            // Simple approach: filter exact duplicates based on Difficulty + Meter + StepsType (if we had it).
+            // Current `charts` object doesn't have StepsType explicitly stored in `parseSM`. `parseSSC` does check `dance-single`.
+            // Let's rely on exact difficulty/meter match?
+            // Or just leave them. The user can pick. (Prefer leaving them or simple dedupe).
+
+            const uniqueCharts = [];
+            const seenCharts = new Set();
+            combinedCharts.forEach(c => {
+                const key = `${c.difficulty}-${c.meter}-${c.notes.length}`;
+                if (!seenCharts.has(key)) {
+                    seenCharts.add(key);
+                    uniqueCharts.push(c);
+                }
+            });
+
             const songObj = {
-                meta: parsedData.meta,
-                charts: parsedData.charts,
+                meta: combinedMeta,
+                charts: uniqueCharts,
                 audioBlob: audioFile,
                 bannerBlob: bannerFile,
                 bgBlob: bgFile,
@@ -2203,14 +2643,12 @@ fileInput.addEventListener('change', async (e) => {
 
             // === Duplicate Check ===
             const duplicateIndex = songLibrary.findIndex(s =>
-                s.meta.title.toLowerCase() === parsedData.meta.title.toLowerCase() &&
-                s.meta.artist.toLowerCase() === parsedData.meta.artist.toLowerCase()
+                s.meta.title.toLowerCase() === combinedMeta.title.toLowerCase() &&
+                s.meta.artist.toLowerCase() === combinedMeta.artist.toLowerCase()
             );
 
             if (duplicateIndex !== -1) {
-                // Auto-replace for folder imports to avoid confirm spam, or maybe smart merge. 
-                // For now, let's just replace.
-                console.log(`Replacing song: ${parsedData.meta.title}`);
+                console.log(`Replacing/Merging song: ${combinedMeta.title}`);
                 songLibrary[duplicateIndex] = songObj;
                 selectedSongIndex = duplicateIndex;
             } else {
@@ -2248,69 +2686,107 @@ async function handleZipImport(e) {
 
     try {
         const zip = await JSZip.loadAsync(file);
-        const smFiles = [];
+        const defFiles = [];
 
         // 1. Find all SM/SSC files
         zip.forEach((relativePath, zipEntry) => {
             const low = relativePath.toLowerCase();
             if ((low.endsWith('.sm') || low.endsWith('.ssc')) && !relativePath.startsWith('__MACOSX')) {
-                smFiles.push(zipEntry);
+                defFiles.push(zipEntry);
             }
         });
 
-        if (smFiles.length === 0) throw new Error("No .sm files found in zip");
+        if (defFiles.length === 0) throw new Error("No .sm files found in zip");
+
+        // Group by folder
+        const songGroups = {};
+        for (const entry of defFiles) {
+            const fullPath = entry.name;
+            const pathParts = fullPath.split('/');
+            pathParts.pop();
+            const rootPath = pathParts.join('/');
+
+            if (!songGroups[rootPath]) songGroups[rootPath] = [];
+            songGroups[rootPath].push(entry);
+        }
 
         let loadedCount = 0;
-        let selectedSongIndex = -1; // To preserve selection if current song is replaced
+        let selectedSongIndex = -1;
+        const groupKeys = Object.keys(songGroups);
 
-        for (let smEntry of smFiles) {
-            setText('loading-text', `Importing Songs (${loadedCount + 1}/${smFiles.length})`);
+        for (let i = 0; i < groupKeys.length; i++) {
+            const rootPath = groupKeys[i];
+            const groupDefs = songGroups[rootPath];
+            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length})`);
 
-            // 2. Identify Song Folder
-            const pathParts = smEntry.name.split('/');
-            pathParts.pop(); // remove filename
-            const folderPath = pathParts.join('/'); // this is the "root" for this song in the zip
+            let combinedMeta = null;
+            let combinedCharts = [];
 
-            // 3. Parse SM Data
-            const text = await smEntry.async("string");
-            const parsedData = parseSM(text);
+            for (const defFile of groupDefs) {
+                const text = await defFile.async("string");
+                let parsed = null;
+                const isSSC = defFile.name.toLowerCase().endsWith('.ssc');
 
-            // === Duplicate Check ===
-            const duplicateIndex = songLibrary.findIndex(s =>
-                s.meta.title.toLowerCase() === parsedData.meta.title.toLowerCase() &&
-                s.meta.artist.toLowerCase() === parsedData.meta.artist.toLowerCase()
-            );
+                if (isSSC) {
+                    console.log(`[Upload] Parsing SSC: ${defFile.name}`);
+                    parsed = parseSSC(text);
+                } else {
+                    parsed = parseSM(text);
+                }
 
-            // 4. Collect ALL files for this song
+                if (parsed) {
+                    if (!combinedMeta || isSSC) {
+                        combinedMeta = parsed.meta;
+                    }
+                    if (parsed.charts) {
+                        combinedCharts = combinedCharts.concat(parsed.charts);
+                    }
+                }
+            }
+
+            if (!combinedMeta) continue;
+
             const noteObj = {
-                meta: parsedData.meta,
-                charts: parsedData.charts,
-                files: {}, // New container for all files
+                meta: combinedMeta,
+                charts: [],
+                files: {},
             };
 
-            // Grab every file in the song's folder
+            // Deduplicate charts
+            const seenCharts = new Set();
+            combinedCharts.forEach(c => {
+                const key = `${c.difficulty}-${c.meter}-${c.notes.length}`;
+                if (!seenCharts.has(key)) {
+                    seenCharts.add(key);
+                    noteObj.charts.push(c);
+                }
+            });
+
+            // Grab all files in this folder from zip
             const songFilePromises = [];
             zip.forEach((relativePath, zipEntry) => {
                 if (zipEntry.dir || relativePath.startsWith('__MACOSX')) return;
 
-                // Check if this file belongs to the song's folder
                 let belongs = false;
-                if (folderPath === "") {
+                // Check if relativePath is inside rootPath
+                // rootPath might be ""
+                if (rootPath === "") {
+                    // If root is empty, then any file without a / is valid? 
+                    // Or any file at all if the definition was at root.
+                    // But if there are folders, we shouldn't grab their contents unless recursive? 
+                    // SM usually implies flat if root.
                     belongs = true;
-                } else if (relativePath.startsWith(folderPath + "/")) {
+                } else if (relativePath.startsWith(rootPath + "/")) {
                     belongs = true;
                 }
 
                 if (belongs) {
                     songFilePromises.push((async () => {
                         const blob = await zipEntry.async("blob");
-                        // Store with relative path from song folder
                         let localName = relativePath;
-                        if (folderPath !== "") {
-                            localName = relativePath.substring(folderPath.length + 1);
+                        if (rootPath !== "") {
+                            localName = relativePath.substring(rootPath.length + 1);
                         }
-                        // Store with original casing for key to handle case-sensitive systems if needed,
-                        // but logic generally uses case-insensitive lookup.
                         noteObj.files[localName] = blob;
                     })());
                 }
@@ -2318,37 +2794,21 @@ async function handleZipImport(e) {
 
             await Promise.all(songFilePromises);
 
-            // Extract standard assets for game engine
-            // noteObj.files keys preserve original case if zip preserved it, but we usually want case-insensitive internal matching?
-            // Actually, handleZipImport stored files with relative path. 
-            // We need to find the files inside noteObj.files
-
-            // Helper to get blob from noteObj.files robustly
             const getFileBlob = (targetName, type) => {
                 const normalize = (s) => s ? s.toLowerCase() : "";
 
-                // 1. Specific Target Logic
                 if (targetName) {
                     const lowerTarget = normalize(targetName);
                     const targetBase = lowerTarget.substring(0, lowerTarget.lastIndexOf('.')) || lowerTarget;
 
-                    // Direct lookup (Exact)
                     if (noteObj.files[lowerTarget]) return noteObj.files[lowerTarget];
 
-                    // Basename lookup (e.g. banner.png vs banner.bmp)
                     for (let fName in noteObj.files) {
                         const fLower = normalize(fName);
-                        // Check if file is in "root" (relative to cached files which are relative to song folder)
-                        // noteObj.files keys are like "banner.png" or "subfolder/img.png"
-                        // We assume assets are usually at the song root or specified path.
-
-                        // If targetName has path, matching is complex. SM usually has local paths "folder/img.png".
-                        // Robustness: match basename strictly?
                         if (fLower.startsWith(targetBase + ".")) return noteObj.files[fName];
                     }
                 }
 
-                // 2. Fallbacks
                 if (type) {
                     const candidates = [];
                     if (type === 'banner') candidates.push('banner', 'bn', 'in');
@@ -2364,14 +2824,12 @@ async function handleZipImport(e) {
                 return null;
             };
 
-            noteObj.bannerBlob = getFileBlob(parsedData.meta.banner, 'banner');
-            noteObj.bgBlob = getFileBlob(parsedData.meta.background, 'background');
-            noteObj.cdTitleBlob = getFileBlob(parsedData.meta.cdtitle, 'cdtitle');
+            noteObj.bannerBlob = getFileBlob(combinedMeta.banner, 'banner');
+            noteObj.bgBlob = getFileBlob(combinedMeta.background, 'background');
+            noteObj.cdTitleBlob = getFileBlob(combinedMeta.cdtitle, 'cdtitle');
 
-            // Audio might be implicit or explicit
-            let audioBlob = getFileBlob(parsedData.meta.music);
+            let audioBlob = getFileBlob(combinedMeta.music);
             if (!audioBlob) {
-                // Fallback: look for any valid audio extension in files
                 for (let fName in noteObj.files) {
                     if (fName.toLowerCase().endsWith('.ogg') || fName.toLowerCase().endsWith('.mp3') || fName.toLowerCase().endsWith('.wav')) {
                         audioBlob = noteObj.files[fName];
@@ -2381,30 +2839,31 @@ async function handleZipImport(e) {
             }
             noteObj.audioBlob = audioBlob;
 
+            const duplicateIndex = songLibrary.findIndex(s =>
+                s.meta.title.toLowerCase() === combinedMeta.title.toLowerCase() &&
+                s.meta.artist.toLowerCase() === combinedMeta.artist.toLowerCase()
+            );
+
             if (duplicateIndex !== -1) {
-                console.log(`Replacing/Repairing song in library: ${parsedData.meta.title}`);
-                const curSong = songLibrary[selectedSongIndex];
-                if (curSong && curSong.meta.title === parsedData.meta.title && curSong.meta.artist === parsedData.meta.artist) {
-                    selectedSongIndex = duplicateIndex; // Mark for re-selection
+                console.log(`Replacing/Merging song via Zip: ${combinedMeta.title}`);
+                if (selectedSongIndex === -1 && songLibrary[selectedSongIndex] && songLibrary[selectedSongIndex].meta.title === combinedMeta.title) {
+                    // Keep selection logic simple
                 }
                 songLibrary[duplicateIndex] = noteObj;
+                selectedSongIndex = duplicateIndex;
             } else {
                 songLibrary.push(noteObj);
+                if (selectedSongIndex === -1) selectedSongIndex = songLibrary.length - 1;
             }
-
             loadedCount++;
         }
 
-        // Refresh list
-        saveLibrary();
-        renderSongList();
-
-        // If we replaced current song, re-select
-        if (selectedSongIndex !== -1 && selectedSongIndex < songLibrary.length) {
-            selectSong(selectedSongIndex);
+        if (loadedCount > 0) {
+            saveLibrary();
+            if (selectedSongIndex !== -1) selectSong(selectedSongIndex);
+            else renderSongList();
         } else {
-            // Only jump to last if we added new ones and weren't selecting anything? 
-            // Behavior choice: just refresh list.
+            alert("No valid songs imported (check audio files).");
         }
 
         setScreen('setup-panel');
@@ -2454,18 +2913,26 @@ function updateScrollSpeed() {
 
     let targetSpeed = 400; // Base pixels per second (at 480px height)
 
+    let rate = 1.0;
+    if (typeof modConfig !== 'undefined' && modConfig.rate) rate = modConfig.rate;
+
     if (type === 'C') {
-        // C-Mod: Constant Speed
-        targetSpeed = val * scaleFactor;
+        // C-Mod: Constant Speed (Pixels / Second)
+        // Since rate mod speeds up time (beats/sec), we must slow down scroll (pixels/beat)
+        // to maintain constant pixels/sec.
+        targetSpeed = (val * scaleFactor) / rate;
     } else if (type === 'X') {
         // X-Mod: Multiplier of Current BPM
+        // Should scale WITH rate (faster song = faster scroll), so NO division.
         const currentBPM = getCurrentBPM();
         targetSpeed = currentBPM * val * 2.5 * scaleFactor;
     } else if (type === 'M') {
-        // M-Mod: Speed = (CurrentBPM / MaxBPM) * M
+        // M-Mod: Max Speed cap
         const mVal = val;
         const currentBPM = getCurrentBPM();
-        targetSpeed = (currentBPM / (gameState.maxBPM || 150)) * mVal * scaleFactor;
+        // M-mod caps the peak speed. Similar to C-mod, we want the PEAK visible speed to be M.
+        // So we also divide by rate.
+        targetSpeed = ((currentBPM / (gameState.maxBPM || 150)) * mVal * scaleFactor) / rate;
     }
 
     gameConfig.scrollSpeed = targetSpeed;

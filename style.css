@@ -655,98 +655,287 @@ body {
 
 /* --- Modifiers Panel --- */
 .modifiers-panel {
-    /* Removed width constraints to allow fitting content, or keep fixed width?
-       Let's keep width but handle positioning via JS.
-       Actually, if we want it "absolute on the left side", we should make it position: fixed
-       so it overlays everything easily without z-index fighting from parents. */
-    width: 350px;
-    /* Reduced width for better fit? Or keep 500px? 500 might be too wide for "left side". Let's try 350. */
-    max-width: 90%;
-    background: rgba(20, 20, 20, 0.98);
-    border: 2px solid #00e5ff;
-    box-shadow: 0 0 50px rgba(0, 229, 255, 0.2);
+    /* Fixed Positioning / Centering handled by flex parent usually, but if modal-overlay is flex center: */
+    width: 600px;
+    max-width: 90vw;
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(15px);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    border-radius: 16px;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 229, 255, 0.1);
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    /* overflow: hidden; Removed to allow dropdowns if needed, but usually okay */
+    position: relative;
+    max-height: 85vh;
+    /* Prevent overflow on small screens */
+}
 
-    position: fixed;
-    /* Changed from default static in flex container */
-    z-index: 1000;
-    /* High z-index */
-    /* top/left set by JS */
+.mod-header-row {
+    padding: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.2);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+}
+
+.mod-header-row h2 {
+    margin: 0 0 15px 0;
+    font-size: 1.5rem;
+    color: #fff;
+    text-align: center;
+    letter-spacing: 1px;
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+}
+
+.mod-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 5px;
+    border-radius: 8px;
+}
+
+.mod-tab-btn {
+    flex: 1;
+    padding: 10px;
+    background: transparent;
+    color: #888;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+    font-size: 1rem;
+    transition: all 0.2s;
+    border-radius: 6px;
+    text-transform: uppercase;
+}
+
+.mod-tab-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.mod-tab-btn.active {
+    color: #000;
+    background: #00e5ff;
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+}
+
+.mod-section-content {
+    padding: 25px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
 }
 
 .mod-group {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding-bottom: 15px;
-    border-bottom: 1px solid #333;
+    gap: 8px;
+    /* border-bottom: 1px solid rgba(255,255,255,0.05); */
+    padding-bottom: 5px;
 }
 
 .mod-group label {
     color: #00e5ff;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.mod-control {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-    background: #000;
-    padding: 10px;
-    border-radius: 8px;
-    justify-content: center;
-}
-
-.mod-control button {
-    width: 40px;
-    height: 40px;
-    background: #333;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    font-size: 1.2rem;
+    letter-spacing: 1.5px;
+    margin-bottom: 5px;
     font-weight: bold;
-    cursor: pointer;
 }
 
-.mod-control button:hover {
-    background: #555;
-}
-
-.mod-control span {
-    font-size: 1.5rem;
-    font-weight: bold;
-    min-width: 80px;
-    text-align: center;
-}
-
+/* Toggle Buttons */
 .mod-toggles {
     display: flex;
-    gap: 10px;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mod-toggles.wrap {
     flex-wrap: wrap;
 }
 
 .mod-toggle-btn {
     flex: 1;
-    padding: 10px;
-    background: #111;
-    border: 1px solid #333;
-    color: #999;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    color: #777;
     border-radius: 6px;
     cursor: pointer;
     font-weight: bold;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+    font-family: inherit;
     white-space: nowrap;
+    text-align: center;
+}
+
+.mod-toggle-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .mod-toggle-btn.active {
-    background: #00e5ff;
-    color: #000;
+    background: #333;
+    color: #00e5ff;
+    border: 1px solid #00e5ff;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.2) inset;
+    text-shadow: 0 0 8px rgba(0, 229, 255, 0.8);
+}
+
+/* Value Controls (+ / -) */
+.mod-control,
+.mod-val-control {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 10px;
+    border-radius: 8px;
+    justify-content: space-between;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mod-control button,
+.mod-val-btn {
+    width: 36px;
+    height: 36px;
+    background: #222;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 6px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mod-control button:hover,
+.mod-val-btn:hover {
+    background: #333;
     border-color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+    color: #00e5ff;
+}
+
+.mod-control button:active,
+.mod-val-btn:active {
+    transform: scale(0.95);
+}
+
+.val-display,
+#mod-rate-display {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: #fff;
+    min-width: 80px;
+    text-align: center;
+    text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Slider */
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+}
+
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 20px;
+    width: 20px;
+    border-radius: 50%;
+    background: #00e5ff;
+    cursor: pointer;
+    margin-top: -8px;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.8);
+}
+
+input[type=range]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: #444;
+    border-radius: 2px;
+}
+
+/* Footer */
+.mod-footer {
+    padding: 20px;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
+}
+
+/* Multi Row Grid for Transforms */
+.mod-multi-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    /* Two columns */
+    gap: 15px;
+}
+
+.section-label {
+    grid-column: 1 / -1;
+    /* Header spans full width */
+    margin-top: 10px;
+}
+
+.mod-item {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px;
+    border-radius: 6px;
+}
+
+.mod-item span {
+    font-size: 0.8rem;
+    color: #ccc;
+    font-weight: bold;
+}
+
+.mod-toggles.mini {
+    /* Smaller toggles for grid items */
+    padding: 2px;
+}
+
+.mod-toggles.mini .mod-toggle-btn {
+    padding: 4px;
+    font-size: 0.8rem;
+}
+
+.mod-tip {
+    font-style: italic;
+    color: #666;
+    font-size: 0.8rem;
+    text-align: center;
+    margin-top: 10px;
 }
 
 /* Start Button Overwrite (to remove width:100% from previous css) */
