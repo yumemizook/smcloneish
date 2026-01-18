@@ -51,79 +51,113 @@
                         <p>Select or Import a Song to Begin</p>
                     </div>
                     <div id="ss-details-content" style="display:none;">
-                        <div class="ss-banner-box">
-                            <img id="ss-banner" src="" alt="" style="display:none;">
-                            <div class="ss-banner-overlay"></div>
-                            <div class="ss-song-text">
-                                <h1 id="ss-title">Title</h1>
-                                <h2 id="ss-artist">Artist</h2>
+                        <!-- Main Content Area -->
+                        <div class="ss-panel-main">
+                            <div class="ss-banner-box">
+                                <img id="ss-banner" src="" alt="" style="display:none;">
+                                <div class="ss-banner-overlay"></div>
+                                <div class="ss-song-text">
+                                    <h1 id="ss-title">Title</h1>
+                                    <h2 id="ss-artist">Artist</h2>
+                                </div>
+                                <img id="ss-cdtitle" src="" alt="" style="display:none;">
+                                <div id="ss-rate-badge" style="display:none;">1.0x</div>
                             </div>
-                            <img id="ss-cdtitle" src="" alt="" style="display:none;">
-                            <div id="ss-rate-badge" style="display:none;">1.0x</div>
+
+                            <!-- TAB: INFO (Default) -->
+                            <div id="tab-info" class="ss-tab-content active">
+                                <div class="ss-content-row">
+                                    <div class="ss-diff-section">
+                                        <h3>Select Difficulty</h3>
+                                        <div id="ss-diff-list"></div>
+                                    </div>
+                                    <div class="ss-info-section">
+                                        <div class="ss-calc-box">
+                                            <h3>Difficulty Breakdown</h3>
+                                            <div class="calc-row highlight"><span>Overall</span> <span
+                                                    id="calc-overall">0.0</span></div>
+                                            <div class="calc-row"><span>Stream</span> <span id="calc-stream">0.0</span>
+                                            </div>
+                                            <div class="calc-row"><span>Jumpstream</span> <span
+                                                    id="calc-jumpstream">0.0</span></div>
+                                            <div class="calc-row"><span>Handstream</span> <span
+                                                    id="calc-handstream">0.0</span></div>
+                                            <div class="calc-row"><span>Chordjack</span> <span
+                                                    id="calc-chordjack">0.0</span></div>
+                                            <div class="calc-row"><span>Technical</span> <span
+                                                    id="calc-technical">0.0</span></div>
+                                            <div class="calc-row"><span>Stamina</span> <span
+                                                    id="calc-stamina">0.0</span></div>
+                                            <div class="calc-row"
+                                                style="border-top:1px solid #444; padding-top:5px; margin-top:5px;">
+                                                <span>NPS</span> <span id="calc-nps">0.0</span>
+                                            </div>
+                                            <div class="calc-row"><span>Peak NPS</span> <span id="calc-peak">0.0</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div id="ss-best-score-display" style="display:none;">
+                                    <h4>BEST SCORE</h4>
+                                    <div class="ss-bs-content">
+                                        <div class="ss-bs-row row-1">
+                                            <div class="ss-bs-grade" id="bs-grade">-</div>
+                                            <div class="ss-bs-meta">
+                                                <span class="ss-bs-clear" id="bs-clear">-</span>
+                                                <span class="ss-bs-ssr" id="bs-ssr">0.00</span>
+                                            </div>
+                                        </div>
+                                        <div class="ss-bs-row row-2">
+                                            <div class="ss-bs-score" id="bs-score">000,000</div>
+                                            <div class="ss-bs-acc" id="bs-acc">0.00%</div>
+                                        </div>
+                                        <div class="ss-bs-row row-3">
+                                            <div class="ss-bs-judges" id="bs-judge-grid"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- TAB: SCORES -->
+                            <div id="tab-scores" class="ss-tab-content" style="display:none;">
+                                <div class="ss-leaderboard-expanded">
+                                    <h3>Leaderboard</h3>
+                                    <div id="ss-full-lb-list"></div>
+                                </div>
+                            </div>
+
+                            <!-- TAB: PREVIEW -->
+                            <div id="tab-preview" class="ss-tab-content" style="display:none;">
+                                <div class="ss-preview-container">
+                                    <div class="ss-preview-stats">
+                                        <span>Notes: <span id="prev-notes">0</span></span>
+                                        <span>Length: <span id="prev-len">0:00</span></span>
+                                    </div>
+                                    <div class="canvas-wrapper">
+                                        <canvas id="preview-canvas"></canvas>
+                                    </div>
+                                    <div class="preview-controls">
+                                        <button id="prev-play-toggle" onclick="togglePreviewPlayback()">⏸</button>
+                                        <input type="range" id="prev-seek" min="0" max="100" step="0.1" value="0" oninput="seekPreview(this.value)">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="ss-action-row">
+                                <button id="btn-modifiers" class="ss-btn-secondary" onclick="openModifiers()">🛠️
+                                    Modifiers</button>
+                                <button class="ss-btn-secondary" onclick="startAutoplay()">▶ Autoplay</button>
+                                <button id="start-btn" class="ss-start-btn" onclick="startGameFromMenu()" disabled>START
+                                    GAME</button>
+                            </div>
                         </div>
 
-                        <div class="ss-content-row">
-                            <div class="ss-diff-section">
-                                <h3>Select Difficulty</h3>
-                                <div id="ss-diff-list"></div>
-                            </div>
-                            <div class="ss-info-section">
-                                <div class="ss-calc-box">
-                                    <h3>Difficulty Breakdown</h3>
-                                    <div class="calc-row highlight"><span>Overall</span> <span
-                                            id="calc-overall">0.0</span></div>
-                                    <div class="calc-row"><span>Stream</span> <span id="calc-stream">0.0</span></div>
-                                    <div class="calc-row"><span>Jumpstream</span> <span id="calc-jumpstream">0.0</span>
-                                    </div>
-                                    <div class="calc-row"><span>Handstream</span> <span id="calc-handstream">0.0</span>
-                                    </div>
-                                    <div class="calc-row"><span>Chordjack</span> <span id="calc-chordjack">0.0</span>
-                                    </div>
-                                    <div class="calc-row"><span>Technical</span> <span id="calc-technical">0.0</span>
-                                    </div>
-                                    <div class="calc-row"><span>Stamina</span> <span id="calc-stamina">0.0</span></div>
-                                    <div class="calc-row"
-                                        style="border-top:1px solid #444; padding-top:5px; margin-top:5px;">
-                                        <span>NPS</span> <span id="calc-nps">0.0</span>
-                                    </div>
-                                    <div class="calc-row"><span>Peak NPS</span> <span id="calc-peak">0.0</span></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Best Score Display (Now Full Width) -->
-                        <div id="ss-best-score-display" style="display:none;">
-                            <h4>BEST SCORE</h4>
-                            <div class="ss-bs-content">
-                                <!-- Row 1: Grade | Meta (Clear + SSR) -->
-                                <div class="ss-bs-row row-1">
-                                    <div class="ss-bs-grade" id="bs-grade">-</div>
-                                    <div class="ss-bs-meta">
-                                        <span class="ss-bs-clear" id="bs-clear">-</span>
-                                        <span class="ss-bs-ssr" id="bs-ssr">0.00</span>
-                                    </div>
-                                </div>
-
-                                <!-- Row 2: Score | Accuracy -->
-                                <div class="ss-bs-row row-2">
-                                    <div class="ss-bs-score" id="bs-score">000,000</div>
-                                    <div class="ss-bs-acc" id="bs-acc">0.00%</div>
-                                </div>
-
-                                <!-- Row 3: Judgments -->
-                                <div class="ss-bs-row row-3">
-                                    <div class="ss-bs-judges" id="bs-judge-grid">
-                                        <!-- Configured in JS -->
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="ss-action-row">
-                            <button id="btn-modifiers" class="ss-btn-secondary" onclick="openModifiers()">🛠️
-                                Modifiers</button>
-                            <button class="ss-btn-secondary" onclick="startAutoplay()">▶ Autoplay</button>
-                            <button id="start-btn" class="ss-start-btn" onclick="startGameFromMenu()" disabled>START
-                                GAME</button>
+                        <!-- Sidebar Navigation -->
+                        <div class="ss-sidebar">
+                            <button class="ss-tab-btn active" onclick="switchSongTab('info')"><span>INFO</span></button>
+                            <button class="ss-tab-btn" onclick="switchSongTab('scores')"><span>SCORES</span></button>
+                            <button class="ss-tab-btn" onclick="switchSongTab('preview')"><span>PREVIEW</span></button>
                         </div>
                     </div>
                 </div>

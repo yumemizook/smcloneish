@@ -878,6 +878,9 @@ function selectDifficulty(chartIndex) {
             return acc >= 0 && fc !== "Fail" && fc !== "Invalid";
         });
 
+        // Sort by Accuracy for display
+        lb.sort((a, b) => parseFloat(b.acc) - parseFloat(a.acc) || b.score - a.score);
+
         if (lb.length > 0) {
             const top = lb[0];
 
@@ -1145,7 +1148,14 @@ async function startGameFromMenu() {
             initGame(gameChart, decoded, song.meta, difficultyCalc, audioUrl);
         } catch (e) {
             console.error("Error decoding audio: " + e.message);
-            document.getElementById('loading-status').style.display = 'none';
+            document.getElementById('bs-grade').className = 'ss-bs-grade';
+        }
+
+        // Refresh Active Tab Content
+        if (currentSongTab === 'scores') {
+            renderFullLeaderboard();
+        } else if (currentSongTab === 'preview') {
+            startChartPreview();
         }
     } else {
         console.error("This song has no audio loaded.");
@@ -1703,7 +1713,7 @@ function handleLeaderboard() {
     const entry = {
         score: Math.round(gameState.score),
         grade: gameState.failed ? "F" : getGrade(acc * 100),
-        acc: (acc * 100).toFixed(2),
+        acc: (acc * 100).toFixed(4), // Use 4 decimal points
         date: new Date().toLocaleDateString(),
         judgments: gameState.judgments,
         ssr: ssr,
@@ -1711,7 +1721,7 @@ function handleLeaderboard() {
     };
 
     lb.push(entry);
-    lb.sort((a, b) => b.score - a.score);
+    lb.sort((a, b) => parseFloat(b.acc) - parseFloat(a.acc) || b.score - a.score);
     lb = lb.slice(0, 10);
     localStorage.setItem(key, JSON.stringify(lb));
 
@@ -1788,7 +1798,14 @@ function showResults() {
     }
     setText('res-acc', accPct >= 99.70 ? accPct.toFixed(4) + "%" : accPct.toFixed(2) + "%");
     setText('res-score', Math.round(gameState.score).toLocaleString());
-    setText('res-dp', gameState.accumulatedAccuracyPoints.toFixed(2));
+
+    // Max DP is total notes * 2 (since max DP per note is 2)
+    const maxDP = total * 2;
+    const resDpEl = document.getElementById('res-dp');
+    if (resDpEl) {
+        resDpEl.innerHTML = `${gameState.accumulatedAccuracyPoints.toFixed(2)} <span style="font-size:0.75em; color:#888;">/ ${maxDP.toFixed(2)}</span>`;
+    }
+
     setText('res-ssr', ssr.toFixed(2));
     setText('res-pauses', gameState.pauseCount);
 
@@ -3388,6 +3405,335 @@ function updateScrollSpeed() {
         targetSpeed = ((currentBPM / (gameState.maxBPM || 150)) * mVal * scaleFactor) / rate;
     }
 
-    gameConfig.scrollSpeed = targetSpeed;
-    // console.log("Updated Speed:", type, val, "=>", targetSpeed, "BPM:", getCurrentBPM());
+    gameState.scrollSpeed = targetSpeed;
 }
+
+/* =========================================
+   SONG SELECT TABS & PREVIEW
+   ========================================= */
+let currentSongTab = 'info';
+let previewCtx = null;
+let previewLoopId = null;
+let previewAudio = null;
+let previewStartTime = 0;
+let previewChartData = null;
+let previewPaused = false;
+let previewAssets = {};
+
+function switchSongTab(tab) {
+    currentSongTab = tab;
+
+    // UI Updates
+    document.querySelectorAll('.ss-tab-content').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.ss-tab-btn').forEach(el => el.classList.remove('active'));
+
+    const activeContent = document.getElementById(`tab-${tab}`);
+    if (activeContent) {
+        activeContent.style.display = 'flex';
+    }
+
+    // Find button index 0,1,2 hardcoded or by title? 
+    // Simplified: Just match order or use data-tab attribute if we had it. 
+    // We used onclick params. Let's select by index based on known order.
+    const tabs = ['info', 'scores', 'preview'];
+    const btnIdx = tabs.indexOf(tab);
+    if (btnIdx !== -1) {
+        const sidebar = document.querySelector('.ss-sidebar');
+        if (sidebar && sidebar.children[btnIdx]) sidebar.children[btnIdx].classList.add('active');
+    }
+
+    // Logic
+    if (tab === 'preview') {
+        startChartPreview();
+    } else {
+        stopChartPreview();
+    }
+
+    if (tab === 'scores') {
+        renderFullLeaderboard();
+    }
+}
+
+function renderFullLeaderboard() {
+    const list = document.getElementById('ss-full-lb-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
+    const song = songLibrary[selectedSongIndex];
+    const chart = song.charts[selectedChartIndex];
+    if (!song || !chart) return;
+
+    const key = `webSM_lb_${song.meta.title}_${chart.difficulty}`;
+    let lb = [];
+    try { lb = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { }
+
+    if (lb.length === 0) {
+        list.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">No scores yet</div>';
+        return;
+    }
+
+    lb.sort((a, b) => parseFloat(b.acc) - parseFloat(a.acc) || b.score - a.score);
+
+    lb.forEach((entry, i) => {
+        const div = document.createElement('div');
+        div.className = 'lb-entry';
+
+        // Color Code
+        const gradeColor = GRADE_COLORS[entry.grade] || '#fff'; // Assuming GRADE_COLORS is defined elsewhere
+        div.style.borderLeftColor = gradeColor;
+
+        // Judge Mini-Grid
+        let jHtml = "";
+        if (entry.judgments) {
+            const J = entry.judgments;
+            // Marv, Perf, Great, Good, Bad, Miss
+            const jList = [J.marvelous, J.perfect, J.great, J.good, J.bad, J.miss];
+            const jColors = ["#a3f7ff", "#ffe600", "#44ff4b", "#0099ff", "#aa00ff", "#ff3333"];
+            jList.forEach((val, idx) => {
+                if (val > 0) jHtml += `<span style="color:${jColors[idx]}">${val}</span>`;
+            });
+        }
+
+        div.innerHTML = `
+            <span class="lb-rank">#${i + 1}</span>
+            <span class="lb-score">${parseInt(entry.score).toLocaleString()}</span>
+            <span class="lb-grade" style="color:${gradeColor}">${entry.grade}</span>
+            <span class="lb-acc">${parseFloat(entry.acc).toFixed(2)}%</span>
+            <div class="lb-judges">${jHtml}</div>
+        `;
+        list.appendChild(div);
+    });
+}
+
+async function startChartPreview() {
+    stopChartPreview(); // Reset
+    if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
+
+    const song = songLibrary[selectedSongIndex];
+    const chart = song.charts[selectedChartIndex];
+    if (!song || !chart) return;
+
+    // Load Assets Lazy
+    if (!previewAssets.arrow) {
+        // Fallback or specific file
+        previewAssets.arrow = new Image();
+        previewAssets.arrow.src = "_Down Tap Note 1x8.png";
+        previewAssets.holdHead = previewAssets.arrow; // Reuse
+        previewAssets.holdBody = new Image();
+        previewAssets.holdBody.src = "Down Hold Body Active.png";
+        // We'll use these simple ones
+    }
+
+    // Setup Stats
+    setText('prev-notes', chart.notes.length);
+    const lastNote = chart.notes[chart.notes.length - 1];
+    let len = 0;
+    if (lastNote) len = lastNote.time;
+    const mins = Math.floor(len / 60);
+    const secs = Math.floor(len % 60).toString().padStart(2, '0');
+    setText('prev-len', `${mins}:${secs}`);
+
+    // Update Slider
+    const slider = document.getElementById('prev-seek');
+    if (slider) {
+        slider.max = len + 2; // +buffer
+        slider.value = 0;
+    }
+
+    const canvas = document.getElementById('preview-canvas');
+    if (!canvas) return;
+    previewCtx = canvas.getContext('2d');
+
+    // Resize wrapper? CSS handles it.
+
+    // Audio Logic
+    if (song.audioBlob) {
+        // Reuse preview start time from chart meta if available, or 0
+        const previewStart = song.meta.sampleStart || 0;
+
+        // We need a fresh audio element or source node.
+        // Let's use HTML5 Audio for simplicity in preview (less syncing requirement than gameplay)
+        if (previewAudio) { // Changed from currentPreviewAudio to previewAudio
+            previewAudio.pause();
+            previewAudio = null;
+        }
+
+        const url = URL.createObjectURL(song.audioBlob);
+        previewAudio = new Audio(url);
+        previewAudio.currentTime = previewStart;
+        previewAudio.volume = 0.5;
+        // previewAudio.loop = true; // Auto loop if not paused
+
+        // Update slider connects to audio time, so we need to loop manually if we want custom seek logic? 
+        // Standard loop works.
+        try {
+            await previewAudio.play();
+            updatePlayBtn(true);
+        } catch (e) { console.warn("Preview autoplay blocked", e); }
+    } else {
+        previewAudio = { currentTime: 0, pause: () => { }, play: () => { } }; // Mock
+    }
+
+    // Chart Data
+    previewChartData = chart.notes;
+    previewPaused = false;
+    previewLoop();
+}
+
+function stopChartPreview() {
+    if (previewLoopId) cancelAnimationFrame(previewLoopId);
+    if (previewAudio) {
+        previewAudio.pause();
+        previewAudio = null;
+    }
+    updatePlayBtn(false);
+}
+
+function togglePreviewPlayback() {
+    if (!previewAudio) return;
+    if (previewAudio.paused) {
+        previewAudio.play();
+        previewPaused = false;
+        updatePlayBtn(true);
+    } else {
+        previewAudio.pause();
+        previewPaused = true;
+        updatePlayBtn(false);
+    }
+}
+
+function updatePlayBtn(playing) {
+    const btn = document.getElementById('prev-play-toggle');
+    if (btn) btn.innerText = playing ? "⏸" : "▶";
+}
+
+function seekPreview(val) {
+    if (previewAudio) {
+        previewAudio.currentTime = parseFloat(val);
+    }
+}
+
+function previewLoop() {
+    if (!previewCtx || !previewAudio) return;
+    const canvas = document.getElementById('preview-canvas');
+    if (!canvas) return;
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // Manage Slider Sync
+    const slider = document.getElementById('prev-seek');
+    if (slider && !slider.matches(':active')) { // Don't fight drag
+        slider.value = previewAudio.currentTime;
+    }
+
+    // Clear
+    previewCtx.fillStyle = '#000';
+    previewCtx.fillRect(0, 0, width, height);
+
+    // Time
+    const time = previewAudio.currentTime;
+
+    // Simple Render: 4 lanes centered
+    // Scroll speed fixed for preview? Or user config? 
+    // Let's use fixed reasonable speed for preview.
+    const speed = 400; // px/sec
+    const receptorY = 50;
+    // Note: scrolling UP means earlier notes are at bottom? No, standard upscroll: notes come from bottom, receptor at top.
+
+    const laneWidth = 40;
+    const totalWidth = laneWidth * 4;
+    const startX = (width - totalWidth) / 2;
+
+    // Render Receptors
+    previewCtx.fillStyle = '#333';
+    for (let i = 0; i < 4; i++) {
+        previewCtx.fillRect(startX + i * laneWidth, receptorY, laneWidth - 2, laneWidth - 2);
+    }
+
+    // Rotations for standard arrows (Down source)
+    // 0: Left (90), 1: Down (0), 2: Up (180), 3: Right (270)
+    const rotations = [90 * Math.PI / 180, 0, 180 * Math.PI / 180, 270 * Math.PI / 180];
+
+    const colors = ['#f55', '#55f', '#5f5', '#ff5']; // L D U R ? standard colors
+    // const colColors = ['#f88', '#88f', '#8f8', '#ff8']; // Simple scheme
+
+    // previewCtx.fillStyle = '#fff';
+
+    for (const note of previewChartData) {
+        const diff = note.time - time;
+        if (diff < -0.5 || diff > 2.0) continue; // optimization
+
+        const y = receptorY + (diff * speed);
+
+        if (y > height + 50) continue; // +50 buffer
+        if (y < -50) continue; // Already passed
+
+        const x = startX + note.col * laneWidth;
+        const noteCheck = (!previewAssets.arrow || !previewAssets.arrow.complete) ? false : true;
+
+        // Draw Logic
+        if (note.type === 'tap' || note.type === 'mine') {
+            if (noteCheck && note.type === 'tap') {
+                // Draw Image
+                const size = laneWidth;
+                previewCtx.save();
+                previewCtx.translate(x + size / 2, y + size / 2);
+                previewCtx.rotate(rotations[note.col]);
+                // Frame 0 of 8 (1/8th height)
+                const sw = previewAssets.arrow.width;
+                const sh = previewAssets.arrow.height / 8;
+                previewCtx.drawImage(previewAssets.arrow, 0, 0, sw, sh, -size / 2, -size / 2, size, size);
+                previewCtx.restore();
+            } else {
+                // Fallback
+                previewCtx.fillStyle = colors[note.col];
+                previewCtx.fillRect(x, y, laneWidth - 2, laneWidth - 2);
+            }
+            if (note.type === 'mine') {
+                previewCtx.fillStyle = '#f00';
+                previewCtx.beginPath();
+                previewCtx.arc(x + laneWidth / 2, y + laneWidth / 2, laneWidth / 3, 0, Math.PI * 2);
+                previewCtx.fill();
+            }
+        }
+        else if (note.type === 'hold' || note.type === 'roll') {
+            // Body
+            const tailDiff = (note.time + note.len) - time;
+            const yHead = y;
+            let yTail = receptorY + (tailDiff * speed);
+
+            // Draw Body
+            if (previewAssets.holdBody && previewAssets.holdBody.complete) {
+                // Simple stretch
+                const bodyW = laneWidth - 10;
+                const bodyH = Math.max(0, yTail - yHead);
+                if (bodyH > 0) {
+                    previewCtx.drawImage(previewAssets.holdBody, x + 5, yHead + laneWidth / 2, bodyW, bodyH);
+                }
+            } else {
+                previewCtx.fillStyle = (note.type === 'roll') ? '#afa' : '#aaa';
+                previewCtx.fillRect(x + 5, yHead + laneWidth / 2, laneWidth - 12, Math.max(0, yTail - yHead));
+            }
+
+            // Head
+            if (noteCheck) {
+                const size = laneWidth;
+                previewCtx.save();
+                previewCtx.translate(x + size / 2, y + size / 2);
+                previewCtx.rotate(rotations[note.col]);
+                const sw = previewAssets.arrow.width;
+                const sh = previewAssets.arrow.height / 8;
+                previewCtx.drawImage(previewAssets.arrow, 0, 0, sw, sh, -size / 2, -size / 2, size, size);
+                previewCtx.restore();
+            } else {
+                previewCtx.fillStyle = colors[note.col];
+                previewCtx.fillRect(x, y, laneWidth - 2, laneWidth - 2);
+            }
+        }
+    }
+
+    if (!previewPaused) {
+        previewLoopId = requestAnimationFrame(previewLoop);
+    }
+}    // console.log("Updated Speed:", type, val, "=>", targetSpeed, "BPM:", getCurrentBPM());
