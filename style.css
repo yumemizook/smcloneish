@@ -1530,7 +1530,10 @@ input[type=range]::-webkit-slider-runnable-track {
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
-    width: 80%;
+    width: 95%;
+    /* Widened from 80% */
+    max-width: 1400px;
+    /* Cap width for ultra-wide screens */
     height: 100%;
     pointer-events: auto;
     position: relative;
@@ -1580,11 +1583,11 @@ input[type=range]::-webkit-slider-runnable-track {
 .res-main-layout {
     display: flex;
     width: 100%;
-    /* Full Width */
     height: 80%;
     gap: 20px;
     justify-content: center;
-    padding: 0 20px;
+    padding: 0;
+    /* Remove padding to maximize space */
     box-sizing: border-box;
 }
 

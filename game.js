@@ -725,6 +725,7 @@ function toggleDeleteMode() {
     renderSongList();
 }
 window.toggleDeleteMode = toggleDeleteMode;
+window.startAutoplay = startAutoplay;
 
 function deleteSong(index) {
     if (index <= 0) return; // Cannot delete sync/placeholder
@@ -869,7 +870,14 @@ function selectDifficulty(chartIndex) {
         bsContainer.style.display = 'block'; // Always show
         if (jGrid) jGrid.innerHTML = ''; // Clear judges
 
-        const lb = JSON.parse(localStorage.getItem(key)) || [];
+        const rawLb = JSON.parse(localStorage.getItem(key)) || [];
+        // Filter out Invalid scores (Negative Acc, Fail, Invalid Fctype)
+        const lb = rawLb.filter(s => {
+            const acc = parseFloat(s.acc);
+            const fc = s.fcType || (s.judgments ? getFCType(s.judgments) : "");
+            return acc >= 0 && fc !== "Fail" && fc !== "Invalid";
+        });
+
         if (lb.length > 0) {
             const top = lb[0];
 
@@ -1080,50 +1088,15 @@ window.onRateChange = (newRate) => {
 
 let currentPreviewAudio = null;
 
-function previewChart() {
-    console.log("Previewing chart...");
-
-    if (currentPreviewAudio) {
-        currentPreviewAudio.pause();
-        currentPreviewAudio = null;
-        console.log("Preview stopped.");
+// ** START AUTOPLAY **
+function startAutoplay() {
+    window.isAutoplayLaunch = true;
+    // Ensure we have a song selected
+    if (selectedSongIndex === -1 || selectedChartIndex === -1) {
+        alert("Please select a song and chart first.");
         return;
     }
-
-    if (selectedSongIndex > -1 && songLibrary[selectedSongIndex]) {
-        const song = songLibrary[selectedSongIndex];
-        if (song.audioBlob) {
-            const url = URL.createObjectURL(song.audioBlob);
-            currentPreviewAudio = new Audio(url);
-
-            // Try to play from offset if available, otherwise 0
-            // Audio element doesn't support seek before load efficiently without metadata, 
-            // but we can try setting currentTime immediately.
-            currentPreviewAudio.volume = 0.6;
-
-            // Play
-            currentPreviewAudio.play().then(() => {
-                console.log("Preview playing.");
-                // Seek to sample start roughly? (e.g. 20s or halfway?)
-                // For now just start.
-            }).catch(e => console.warn("Preview play failed:", e));
-
-            // Stop after 15 seconds
-            setTimeout(() => {
-                if (currentPreviewAudio) {
-                    currentPreviewAudio.pause();
-                    currentPreviewAudio = null;
-                }
-            }, 15000);
-
-            // Cleanup on end
-            currentPreviewAudio.onended = () => { currentPreviewAudio = null; };
-        } else {
-            console.log("No audio blob available for this song.");
-        }
-    } else {
-        console.log("No song selected.");
-    }
+    startGameFromMenu();
 }
 
 // ** START GAME **
@@ -1201,6 +1174,7 @@ function getGrade(percentage) {
 function getGradeColor(grade) { return GRADE_COLORS[grade] || "#888"; }
 
 function calculateSSR(difficulty, accuracyDec) {
+    if (accuracyDec < 0) return 0; // Clamp negative accuracy
     if (accuracyDec < 0.93) return difficulty * Math.pow(accuracyDec / 0.93, 6);
     else return difficulty * (1 + 15 * Math.pow(accuracyDec - 0.93, 2));
 }
@@ -1344,6 +1318,12 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         gameState.totalNotesHitOrMissed++; lifeChange = -16.0; note.processed = true;
     } else {
         let accPercent = isMiss ? -275 : calculateAccuracy(offsetMs);
+
+        // Autoplay Penalty Override
+        if (gameState.isAutoplay && !isMiss) {
+            accPercent = -75000;
+        }
+
         let dpPoints = 2 * (accPercent / 100);
         gameState.accumulatedAccuracyPoints += dpPoints; gameState.totalNotesHitOrMissed++;
         const baseNoteScore = 1000000 / Math.max(1, gameState.totalNotesInChart);
@@ -1748,6 +1728,10 @@ function handleLeaderboard() {
 }
 
 function showResults() {
+    if (gameState.isAutoplay) {
+        quitGame();
+        return;
+    }
     gameState.isPlaying = false;
     const acc = gameState.totalNotesHitOrMissed > 0 ? gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed * 2) : 0;
 
@@ -2238,6 +2222,37 @@ function gameLoop() {
     if (typeof updateScrollSpeed === 'function') updateScrollSpeed();
 
     gameState.globalFrame++;
+
+    // --- AUTOPLAY LOGIC ---
+    if (gameState.isAutoplay) {
+        gameState.heldKeys = [false, false, false, false];
+        // Scan for new hits and maintain holds
+        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+            const n = gameState.activeNotes[i];
+
+            // Optimization: Don't scan too far into future
+            if (n.time > currentTime + 0.1) break;
+
+            // 1. Hit new notes
+            if (!n.processed && n.holdState !== 'active' && n.type !== 'mine') {
+                if (n.time <= currentTime) {
+                    n.hit = true;
+                    // Simulate Key Press Visual
+                    gameState.heldKeys[n.col] = true;
+                    triggerJudgement(n, 0, false);
+
+                    // Note: triggerJudgement(hold) -> sets holdState='active'
+                }
+            }
+
+            // 2. Maintain active Holds/Rolls
+            if ((n.type === 'hold' || n.type === 'roll') && n.holdState === 'active') {
+                gameState.heldKeys[n.col] = true;
+                if (n.type === 'roll') n.lastPressTime = currentTime;
+            }
+        }
+    }
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Update First Active Note (Skip old processed notes)
@@ -2626,7 +2641,14 @@ window.onRateChange = (newRate) => {
 };
 
 function handleInput(e) {
-    if (e.code === 'Escape') { if (e.type === 'keydown') togglePause(); return; }
+    if (e.code === 'Escape') {
+        if (gameState.isAutoplay) {
+            quitGame();
+            return;
+        }
+        if (e.type === 'keydown') togglePause();
+        return;
+    }
     if (!gameState.isPlaying || gameState.isPaused) return;
     const key = e.key.toLowerCase();
     const colIndex = userConfig.keys.indexOf(key);
@@ -2734,9 +2756,12 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         heldKeys: [false, false, false, false],
         npsHistory: [],
         currentNPS: 0,
+        currentNPS: 0,
         peakNPS: 0,
-        bpmTimes: [] // Pre-calculated time-based BPM segments
+        bpmTimes: [], // Pre-calculated time-based BPM segments
+        isAutoplay: !!window.isAutoplayLaunch // Set Autoplay State
     };
+    window.isAutoplayLaunch = false; // Reset flag
 
     // Pre-calculate BPM logic for X/M mods
     if (meta.bpms) {
