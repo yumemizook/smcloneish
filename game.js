@@ -43,6 +43,23 @@ const GRADE_COLORS = {
     "A": "#da5757", "B": "#5b78bb", "C": "#c97bff", "D": "#8c6239", "F": "#888888"
 };
 
+const CLEAR_COLORS = {
+    MFC: "#66ccff",
+    WF: "#dddddd",
+    SDP: "#cc8800",
+    PFC: "#eeaa00",
+    BF: "#999999",
+    SDG: "#448844",
+    FC: "#66cc66",
+    MF: "#cc6666",
+    SDCB: "#33bbff",
+    Clear: "#33aaff",
+    Failed: "#e61e25",
+    Invalid: "#e61e25",
+    NoPlay: "#666666",
+    None: "#666666"
+};
+
 const QUANTIZATION_ROWS = { 4: 0, 8: 1, 12: 2, 16: 3, 24: 4, 32: 5, 48: 6, 64: 7 };
 
 /* =========================================
@@ -499,7 +516,15 @@ let gameState = {
     detailedHits: []
 };
 
-let gameConfig = { scrollSpeed: 0, receptorY: 0, columnWidth: 0, arrowSize: 0 };
+let gameConfig = {
+    receptorY: 100, // Fixed receptor Y position
+    scrollSpeed: 400, // Default pixels per second
+    columnWidth: 85,
+    arrowSize: 85 // slightly smaller than col to prevent overlap
+};
+
+// function updateScrollSpeed removed - logic inlined in gameLoop
+
 
 let assets = {
     arrowSprite: new Image(), holdHeadActive: new Image(), holdBody: new Image(),
@@ -898,8 +923,15 @@ function selectDifficulty(chartIndex) {
 
             setText('bs-ssr', (top.ssr || 0).toFixed(2));
             // Use saved FC Type (Fail/Invalid support) or calculate legacy
-            const calculatedFC = top.fcType || (top.judgments ? getFCType(top.judgments) : "");
+            const calculatedFC = top.fcType || (top.judgments ? getClearType(top.judgments) : "");
             setText('bs-clear', calculatedFC);
+
+            // Apply Color
+            if (document.getElementById('bs-clear')) {
+                const c = CLEAR_COLORS[calculatedFC] || "#fff";
+                document.getElementById('bs-clear').style.color = c;
+                document.getElementById('bs-clear').style.textShadow = `0 0 10px ${c}`;
+            }
 
             // Judge Grid
             if (jGrid) {
@@ -1246,17 +1278,17 @@ function updateScoreDisplay() {
 
                 if (!hasMiss) {
                     if (!hasGreat && !hasPerf) {
-                        // MFC - Cyan
-                        color = "#00e5ff";
-                        shadow = "0 0 10px rgba(0, 229, 255, 0.8), 0 0 20px rgba(0, 229, 255, 0.5)";
+                        // MFC
+                        color = CLEAR_COLORS.MFC;
+                        shadow = `0 0 10px ${CLEAR_COLORS.MFC}cc, 0 0 20px ${CLEAR_COLORS.MFC}80`;
                     } else if (!hasGreat) {
-                        // PFC - Yellow
-                        color = "#ffe600";
-                        shadow = "0 0 10px rgba(255, 230, 0, 0.8), 0 0 20px rgba(255, 230, 0, 0.5)";
+                        // PFC
+                        color = CLEAR_COLORS.PFC;
+                        shadow = `0 0 10px ${CLEAR_COLORS.PFC}cc, 0 0 20px ${CLEAR_COLORS.PFC}80`;
                     } else {
-                        // FC - Lime Green
-                        color = "#00ff00";
-                        shadow = "0 0 10px rgba(0, 255, 0, 0.8), 0 0 20px rgba(0, 255, 0, 0.5)";
+                        // FC
+                        color = CLEAR_COLORS.FC;
+                        shadow = `0 0 10px ${CLEAR_COLORS.FC}cc, 0 0 20px ${CLEAR_COLORS.FC}80`;
                     }
                 }
             }
@@ -1700,7 +1732,7 @@ function handleLeaderboard() {
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
 
     // Determine Clear Type and SSR
-    let fcType = getFCType(gameState.judgments);
+    let fcType = getClearType();
     let ssr = calculateSSR(diff, acc);
 
     if (gameState.failed) {
@@ -1765,7 +1797,7 @@ function showResults() {
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
 
     // Determine Clear Type and SSR
-    let clearType = getFCType(gameState.judgments);
+    let clearType = getClearType();
     let ssr = calculateSSR(diff, acc);
 
     if (gameState.failed) {
@@ -1776,6 +1808,11 @@ function showResults() {
     }
 
     setText('res-clear-type', clearType);
+    if (document.getElementById('res-clear-type')) {
+        const c = CLEAR_COLORS[clearType] || "#fff";
+        document.getElementById('res-clear-type').style.color = c;
+        document.getElementById('res-clear-type').style.textShadow = `0 0 10px ${c}`;
+    }
 
     // Rate Display in Results
     const resRateEl = document.getElementById('res-rate-display');
@@ -2235,8 +2272,34 @@ function gameLoop() {
         currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
     }
 
-    // Update Scroll Speed (X/M mods need dynamic update due to potential BPM changes or Rate changes if linked)
-    if (typeof updateScrollSpeed === 'function') updateScrollSpeed();
+    // FORCE SPEED UPDATE (INLINED)
+    const mCfg = (typeof window.modConfig !== 'undefined') ? window.modConfig : modConfig;
+    if (mCfg) {
+        const TARGET_HEIGHT = 480;
+        const _h = canvas ? canvas.height : 480;
+        const _scale = _h / TARGET_HEIGHT;
+        let _bpm = 120;
+
+        // Get BPM
+        if (gameState.currentBPM) _bpm = gameState.currentBPM;
+        else if (gameState.bpmTimes) {
+            const _now = (gameState.audioCtx ? gameState.audioCtx.currentTime : 0) - gameState.startTime;
+            const _cur = gameState.bpmTimes.filter(b => b.time <= _now).pop();
+            if (_cur) _bpm = _cur.bpm;
+        }
+
+        let _base = 400;
+        if (mCfg.speedType === 'C') _base = mCfg.speedValue;
+        else if (mCfg.speedType === 'M') {
+            const _max = gameState.maxBPM || 150;
+            _base = _bpm * (mCfg.speedValue / _max);
+        } else {
+            // X-Mod
+            _base = _bpm * mCfg.speedValue * 1.1;
+        }
+
+        gameConfig.scrollSpeed = _base * _scale;
+    }
 
     gameState.globalFrame++;
 
@@ -3477,30 +3540,58 @@ function renderFullLeaderboard() {
 
     lb.forEach((entry, i) => {
         const div = document.createElement('div');
-        div.className = 'lb-entry';
+        div.className = 'ss-lb-item';
 
-        // Color Code
-        const gradeColor = GRADE_COLORS[entry.grade] || '#fff'; // Assuming GRADE_COLORS is defined elsewhere
-        div.style.borderLeftColor = gradeColor;
-
-        // Judge Mini-Grid
-        let jHtml = "";
-        if (entry.judgments) {
-            const J = entry.judgments;
-            // Marv, Perf, Great, Good, Bad, Miss
-            const jList = [J.marvelous, J.perfect, J.great, J.good, J.bad, J.miss];
-            const jColors = ["#a3f7ff", "#ffe600", "#44ff4b", "#0099ff", "#aa00ff", "#ff3333"];
-            jList.forEach((val, idx) => {
-                if (val > 0) jHtml += `<span style="color:${jColors[idx]}">${val}</span>`;
-            });
+        // Color Code & Tint using Clear Type
+        // If fcType is present, use it. Fallback to Grade logic if needed (or default).
+        let tintColor = "#ffffff";
+        if (entry.fcType && CLEAR_COLORS[entry.fcType]) {
+            tintColor = CLEAR_COLORS[entry.fcType];
+        } else {
+            tintColor = GRADE_COLORS[entry.grade] || '#fff';
         }
 
+        // Convert Hex to RGBA for tint
+        const hex = tintColor.replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        div.style.background = `linear-gradient(to right, rgba(${r},${g},${b},0.15), rgba(255,255,255,0.02))`;
+        div.style.borderLeft = `4px solid ${tintColor}`;
+
+        // Prepare Judgments Grid (ALL judgments, including 0s)
+        const J = entry.judgments || { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0 };
+        const jKeys = ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss'];
+        const jLabels = ['MARV', 'PERF', 'GRT', 'GOOD', 'BAD', 'MISS'];
+        const jColors = ["#a3f7ff", "#ffe600", "#44ff4b", "#0099ff", "#aa00ff", "#ff3333"];
+
+        let jHtml = "";
+        jKeys.forEach((k, idx) => {
+            const val = J[k] || 0;
+            const color = val > 0 ? jColors[idx] : '#555';
+            jHtml += `
+                <div class="ss-lb-judge-col">
+                    <span class="ss-judge-label">${jLabels[idx]}</span>
+                    <span class="ss-judge-val" style="color:${color}">${val}</span>
+                </div>
+            `;
+        });
+
         div.innerHTML = `
-            <span class="lb-rank">#${i + 1}</span>
-            <span class="lb-score">${parseInt(entry.score).toLocaleString()}</span>
-            <span class="lb-grade" style="color:${gradeColor}">${entry.grade}</span>
-            <span class="lb-acc">${parseFloat(entry.acc).toFixed(2)}%</span>
-            <div class="lb-judges">${jHtml}</div>
+            <div class="ss-lb-main-row">
+                <span class="ss-lb-rank">#${i + 1}</span>
+                <span class="ss-lb-score">${parseInt(entry.score).toLocaleString()}</span>
+            </div>
+            <div class="ss-lb-details-row">
+                <div class="ss-lb-meta">
+                    <span class="ss-lb-grade" style="color:${tintColor}">${entry.grade}</span>
+                    <span class="ss-lb-acc">${parseFloat(entry.acc).toFixed(2)}%</span>
+                    <span style="font-size:0.7em; color:#aaa; margin-top:2px">${entry.fcType || ""}</span>
+                </div>
+                <div class="ss-lb-judgments">
+                    ${jHtml}
+                </div>
+            </div>
         `;
         list.appendChild(div);
     });
@@ -3635,62 +3726,106 @@ function previewLoop() {
     const time = previewAudio.currentTime;
 
     // Simple Render: 4 lanes centered
-    // Scroll speed fixed for preview? Or user config? 
-    // Let's use fixed reasonable speed for preview.
     const speed = 400; // px/sec
-    const receptorY = 50;
+
+    // Dynamic Receptor Placement
+    // userConfig should be available globally
+    const isDownScroll = userConfig.downScroll;
+    const receptorY = isDownScroll ? height - 50 : 50;
+
     // Note: scrolling UP means earlier notes are at bottom? No, standard upscroll: notes come from bottom, receptor at top.
+
+    // Check asset readiness (using main game assets)
+    const canUseSkin = assets.loaded.arrowSprite && assets.loaded.receptorSprite;
 
     const laneWidth = 40;
     const totalWidth = laneWidth * 4;
     const startX = (width - totalWidth) / 2;
 
     // Render Receptors
-    previewCtx.fillStyle = '#333';
-    for (let i = 0; i < 4; i++) {
-        previewCtx.fillRect(startX + i * laneWidth, receptorY, laneWidth - 2, laneWidth - 2);
+    if (canUseSkin) {
+        // Draw Receptors from Sprite (2x1: 2 Columns, 1 Row usually for Flash/Idle)
+        // We only want the first frame (Idle)
+        const rSw = assets.receptorSprite.width / 2; // Split width by 2
+        const rSh = assets.receptorSprite.height;    // Full height
+
+        for (let i = 0; i < 4; i++) {
+            const rx = startX + i * laneWidth;
+            previewCtx.save();
+            previewCtx.translate(rx + laneWidth / 2, receptorY + laneWidth / 2);
+            // Rotations: Left, Down, Up, Right
+            const rot = [90, 0, 180, 270][i] * Math.PI / 180;
+            previewCtx.rotate(rot);
+            // Verify destination size to avoid squash/stretch. 
+            // Note: laneWidth is 40. Receptor sprite frame should be square? 
+            // If it's not, we should preserve aspect or center it.
+            // Standard SM assets are square. If not, we force square.
+
+            previewCtx.drawImage(assets.receptorSprite, 0, 0, rSw, rSh, -laneWidth / 2, -laneWidth / 2, laneWidth, laneWidth);
+            previewCtx.restore();
+        }
+    } else {
+        previewCtx.fillStyle = '#333';
+        for (let i = 0; i < 4; i++) {
+            previewCtx.fillRect(startX + i * laneWidth, receptorY, laneWidth - 2, laneWidth - 2);
+        }
     }
 
     // Rotations for standard arrows (Down source)
     // 0: Left (90), 1: Down (0), 2: Up (180), 3: Right (270)
     const rotations = [90 * Math.PI / 180, 0, 180 * Math.PI / 180, 270 * Math.PI / 180];
 
-    const colors = ['#f55', '#55f', '#5f5', '#ff5']; // L D U R ? standard colors
-    // const colColors = ['#f88', '#88f', '#8f8', '#ff8']; // Simple scheme
-
-    // previewCtx.fillStyle = '#fff';
+    const colors = ['#f55', '#55f', '#5f5', '#ff5']; // L D U R
 
     for (const note of previewChartData) {
         const diff = note.time - time;
         if (diff < -0.5 || diff > 2.0) continue; // optimization
 
-        const y = receptorY + (diff * speed);
+        // Calc Y based on scroll direction
+        // Downscroll: Notes fall DOWN to receptor (Y increases as diff decreases? Wait. Diff = noteTime - time)
+        // Future note (diff > 0):
+        // Upscroll: Note is BELOW receptor (Y > receptorY). Y = receptorY + diff * speed
+        // Downscroll: Note is ABOVE receptor (Y < receptorY). Y = receptorY - diff * speed
 
-        if (y > height + 50) continue; // +50 buffer
-        if (y < -50) continue; // Already passed
+        // Let's verify standard direction logic
+        // Standard (Upscroll): Receptor at Top (50). Future Note at 1s (diff=1). Y should be 50 + 400 = 450. Correct.
+        // Downscroll: Receptor at Bottom (600). Future Note at 1s (diff=1). Y should be 600 - 400 = 200. Correct.
+
+        const y = isDownScroll ? receptorY - (diff * speed) : receptorY + (diff * speed);
+
+        if (y > height + 60 || y < -60) continue; // Buffer
 
         const x = startX + note.col * laneWidth;
-        const noteCheck = (!previewAssets.arrow || !previewAssets.arrow.complete) ? false : true;
 
         // Draw Logic
-        if (note.type === 'tap' || note.type === 'mine') {
-            if (noteCheck && note.type === 'tap') {
+        if (note.type === 'tap') {
+            if (canUseSkin) {
                 // Draw Image
                 const size = laneWidth;
                 previewCtx.save();
                 previewCtx.translate(x + size / 2, y + size / 2);
                 previewCtx.rotate(rotations[note.col]);
                 // Frame 0 of 8 (1/8th height)
-                const sw = previewAssets.arrow.width;
-                const sh = previewAssets.arrow.height / 8;
-                previewCtx.drawImage(previewAssets.arrow, 0, 0, sw, sh, -size / 2, -size / 2, size, size);
+                const sw = assets.arrowSprite.width;
+                const sh = assets.arrowSprite.height / 8;
+                // Ensure no stretch? If sw != sh, standard behavior is usually to fit sq?
+                // SM notes are square.
+                previewCtx.drawImage(assets.arrowSprite, 0, 0, sw, sh, -size / 2, -size / 2, size, size);
                 previewCtx.restore();
             } else {
-                // Fallback
                 previewCtx.fillStyle = colors[note.col];
                 previewCtx.fillRect(x, y, laneWidth - 2, laneWidth - 2);
             }
-            if (note.type === 'mine') {
+        }
+        else if (note.type === 'mine') {
+            if (assets.loaded.mineSprite) {
+                const size = laneWidth;
+                previewCtx.save();
+                previewCtx.translate(x + size / 2, y + size / 2);
+                previewCtx.rotate(gameState.globalFrame * 0.1); // Spin?
+                previewCtx.drawImage(assets.mineSprite, 0, 0, assets.mineSprite.width, assets.mineSprite.height, -size / 2, -size / 2, size, size);
+                previewCtx.restore();
+            } else {
                 previewCtx.fillStyle = '#f00';
                 previewCtx.beginPath();
                 previewCtx.arc(x + laneWidth / 2, y + laneWidth / 2, laneWidth / 3, 0, Math.PI * 2);
@@ -3698,39 +3833,69 @@ function previewLoop() {
             }
         }
         else if (note.type === 'hold' || note.type === 'roll') {
-            // Body
-            const tailDiff = (note.time + note.len) - time;
-            const yHead = y;
-            let yTail = receptorY + (tailDiff * speed);
+            // Logic similar to tap but with body
+            // We need endTime or length
+            // note.endTime is populated in parser? Yes.
+            // If active hold, we might need special handling, but for preview we can just draw based on times
 
-            // Draw Body
-            if (previewAssets.holdBody && previewAssets.holdBody.complete) {
-                // Simple stretch
-                const bodyW = laneWidth - 10;
-                const bodyH = Math.max(0, yTail - yHead);
-                if (bodyH > 0) {
-                    previewCtx.drawImage(previewAssets.holdBody, x + 5, yHead + laneWidth / 2, bodyW, bodyH);
+            if (note.endTime) {
+                const tailDiff = note.endTime - time;
+                const headDiff = diff;
+
+                // Calc Ys
+                const headY = isDownScroll ? receptorY - (headDiff * speed) : receptorY + (headDiff * speed);
+                const tailY = isDownScroll ? receptorY - (tailDiff * speed) : receptorY + (tailDiff * speed);
+
+                // Length geometry:
+                // Upscroll: Head is at headY (e.g. 450), Tail is at tailY (e.g. 850). Body is from 450 to 850.
+                // Downscroll: Head is at headY (e.g. 200), Tail is at tailY (e.g. -200). Body is from -200 to 200.
+
+                let topY, bottomY;
+                if (isDownScroll) {
+                    topY = tailY;
+                    bottomY = headY;
+                } else {
+                    topY = headY;
+                    bottomY = tailY;
                 }
-            } else {
-                previewCtx.fillStyle = (note.type === 'roll') ? '#afa' : '#aaa';
-                previewCtx.fillRect(x + 5, yHead + laneWidth / 2, laneWidth - 12, Math.max(0, yTail - yHead));
-            }
 
-            // Head
-            if (noteCheck) {
-                const size = laneWidth;
-                previewCtx.save();
-                previewCtx.translate(x + size / 2, y + size / 2);
-                previewCtx.rotate(rotations[note.col]);
-                const sw = previewAssets.arrow.width;
-                const sh = previewAssets.arrow.height / 8;
-                previewCtx.drawImage(previewAssets.arrow, 0, 0, sw, sh, -size / 2, -size / 2, size, size);
-                previewCtx.restore();
-            } else {
-                previewCtx.fillStyle = colors[note.col];
-                previewCtx.fillRect(x, y, laneWidth - 2, laneWidth - 2);
+                // Draw Body
+                if (canUseSkin && assets.loaded.holdBody) {
+                    const bodyImg = note.type === 'roll' && assets.loaded.rollBody ? assets.rollBody : assets.holdBody;
+                    const bw = laneWidth; // Body width usually slightly smaller?
+                    const bh = bottomY - topY; // Length
+
+                    if (bh > 0) {
+                        // Tiling or stretching? SM usually stretches or tiles. Let's stretch for simplicity in preview
+                        previewCtx.drawImage(bodyImg, x, topY, bw, bh);
+                    }
+
+                    // Cap (Head) - Draw ON TOP of body
+                    const size = laneWidth;
+                    previewCtx.save();
+                    previewCtx.translate(x + size / 2, headY + size / 2); // Head always at headY
+                    previewCtx.rotate(rotations[note.col]);
+
+                    // Head sprite: assuming active hold head or tap note? 
+                    // Usually "Hold Head Active" or just Tap Note. 
+                    const headImg = assets.loaded.holdHeadActive ? assets.holdHeadActive : assets.arrowSprite;
+                    // Frame 0
+                    const hsw = headImg.width;
+                    const hsh = headImg === assets.arrowSprite ? headImg.height / 8 : headImg.height; // Single frame or atlas?
+                    // Verify "Down Hold Active 1x8.png" -> 8 frames
+                    const srcH = headImg.src.includes('1x8') ? headImg.height / 8 : headImg.height;
+
+                    previewCtx.drawImage(headImg, 0, 0, hsw, srcH, -size / 2, -size / 2, size, size);
+
+                    previewCtx.restore();
+
+                } else {
+                    previewCtx.fillStyle = 'rgba(200, 200, 200, 0.5)';
+                    previewCtx.fillRect(x + 5, topY, laneWidth - 10, bottomY - topY);
+                }
             }
         }
+
     }
 
     if (!previewPaused) {

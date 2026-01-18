@@ -54,6 +54,8 @@ const modConfig = {
         magnitude: 100
     }
 };
+window.modConfig = modConfig; // Expose globally explicitly
+
 
 /* =========================================
    UI HANDLERS
@@ -151,6 +153,7 @@ function changeSpeedVal(delta) {
     }
     updateModifiersUI();
 }
+window.changeSpeedVal = changeSpeedVal;
 
 function changeRateVal(delta) {
     const step = 0.05;

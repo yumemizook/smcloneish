@@ -50,7 +50,15 @@
                     <div id="ss-empty-state">
                         <p>Select or Import a Song to Begin</p>
                     </div>
+
                     <div id="ss-details-content" style="display:none;">
+                        <!-- Horizontal Top Navbar -->
+                        <div class="ss-navbar">
+                            <button class="ss-tab-btn active" onclick="switchSongTab('info')"><span>INFO</span></button>
+                            <button class="ss-tab-btn" onclick="switchSongTab('scores')"><span>SCORES</span></button>
+                            <button class="ss-tab-btn" onclick="switchSongTab('preview')"><span>PREVIEW</span></button>
+                        </div>
+
                         <!-- Main Content Area -->
                         <div class="ss-panel-main">
                             <div class="ss-banner-box">
@@ -139,7 +147,8 @@
                                     </div>
                                     <div class="preview-controls">
                                         <button id="prev-play-toggle" onclick="togglePreviewPlayback()">⏸</button>
-                                        <input type="range" id="prev-seek" min="0" max="100" step="0.1" value="0" oninput="seekPreview(this.value)">
+                                        <input type="range" id="prev-seek" min="0" max="100" step="0.1" value="0"
+                                            oninput="seekPreview(this.value)">
                                     </div>
                                 </div>
                             </div>
@@ -153,12 +162,7 @@
                             </div>
                         </div>
 
-                        <!-- Sidebar Navigation -->
-                        <div class="ss-sidebar">
-                            <button class="ss-tab-btn active" onclick="switchSongTab('info')"><span>INFO</span></button>
-                            <button class="ss-tab-btn" onclick="switchSongTab('scores')"><span>SCORES</span></button>
-                            <button class="ss-tab-btn" onclick="switchSongTab('preview')"><span>PREVIEW</span></button>
-                        </div>
+                        <!-- Sidebar Navigation Removed -->
                     </div>
                 </div>
             </div>
