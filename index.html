@@ -21,7 +21,7 @@
         <div id="intro-screen">
             <div id="intro-content">
                 <h1 id="intro-title">WebSM</h1>
-                <div id="intro-loading-text" class="glow-text">Now Loading...</div>
+                <div id="intro-loading-text" class="glow-text">Now Loading... <br> If the game is stuck here, contact the developer.</div>
                 <div id="intro-prompt" class="blink-text" style="display:none;">PRESS ANY KEY TO START</div>
             </div>
         </div>
@@ -154,6 +154,7 @@
                             </div>
 
                             <div class="ss-action-row">
+                                <button class="ss-btn-secondary" onclick="openSettings()">⚙ Settings</button>
                                 <button id="btn-modifiers" class="ss-btn-secondary" onclick="openModifiers()">🛠️
                                     Modifiers</button>
                                 <button class="ss-btn-secondary" onclick="startAutoplay()">▶ Autoplay</button>
@@ -270,6 +271,24 @@
                                 <input type="range" id="mod-appear-offset-slider" min="0" max="100" step="5"
                                     oninput="setModifier('appearOffset', this.value)">
                                 <span id="mod-appear-offset-val">50%</span>
+                            </div>
+                        </div>
+
+                        <div class="mod-group" id="mod-tracker">
+                            <label>Target Tracker</label>
+                            <div class="mod-toggles wrap">
+                                <button class="mod-toggle-btn" data-val="off" onclick="setModifier('targetTracker', 'off')">Off</button>
+                                <button class="mod-toggle-btn" data-val="percent" onclick="setModifier('targetTracker', 'percent')">Percent</button>
+                                <button class="mod-toggle-btn" data-val="pb" onclick="setModifier('targetTracker', 'pb')">PB</button>
+                            </div>
+                        </div>
+
+                        <div class="mod-group" id="mod-tracker-val-group">
+                            <label>Target %</label>
+                            <div class="mod-control">
+                                <button onclick="changeTrackerVal(-1)">-</button>
+                                <span id="mod-tracker-val-display" class="val-display" style="font-size:1.1rem">93.00%</span>
+                                <button onclick="changeTrackerVal(1)">+</button>
                             </div>
                         </div>
                     </div>
@@ -482,7 +501,7 @@
                         <li><span class="key-badge">F</span> Down</li>
                         <li><span class="key-badge">J</span> Up</li>
                         <li><span class="key-badge">K</span> Right</li>
-                        <li><span class="key-badge">ESC</span> Pause/Back</li>
+                        <li><span class="key-badge">ESC</span> Pause/Back</li>`r`n                        \u003cli\u003e\u003cspan class="key-badge"\u003e`` (Backtick)\u003c/span\u003e Quick Retry\u003c/li\u003e
                         <li><span class="key-badge">ENTER</span> Confirm</li>
                     </ul>
 
@@ -568,33 +587,75 @@
         </div>
 
         <!-- Settings Modal -->
-        <div id="settings-modal" style="display:none;">
-            <h2>Settings</h2>
-            <div class="settings-content">
-                <div class="setting-group">
-                    <h3>Gameplay</h3>
-                    <div class="setting-row">
-                        <!-- Redundant settings moved to modifiers -->
-                        <span style="color:#666; font-style:italic;">Use Modifiers Menu for Speed/Scroll</span>
-                    </div>
+        <div id="settings-modal" class="modal-overlay" style="display:none;">
+            <div class="modal-content settings-panel" style="width: 75%">
+                <div class="mod-header-row">
+                    <h2>Settings</h2>
                 </div>
-                <div class="setting-group">
-                    <h3>Controls</h3>
-                    <div class="setting-row keybinds">
-                        <label>Keybinds</label>
-                        <div class="key-inputs">
+                <div class="settings-content">
+                    <div class="setting-group">
+                        <h3>Gameplay</h3>
+                        <div class="setting-row-col">
+                            <label>Judge Difficulty</label>
+                            <div class="mod-toggles" id="set-judge-group">
+                                <button class="mod-toggle-btn" onclick="setJudgeDiff(4)" data-val="4">4</button>
+                                <button class="mod-toggle-btn" onclick="setJudgeDiff(5)" data-val="5">5</button>
+                                <button class="mod-toggle-btn" onclick="setJudgeDiff(6)" data-val="6">6</button>
+                                <button class="mod-toggle-btn" onclick="setJudgeDiff(7)" data-val="7">7</button>
+                                <button class="mod-toggle-btn" onclick="setJudgeDiff(8)" data-val="8">8</button>
+                                <button class="mod-toggle-btn" onclick="setJudgeDiff(9)" data-val="9">9</button>
+                            </div>
+                        </div>
+                        <div class="setting-row-col" style="margin-top:15px;">
+                            <label>Life Difficulty</label>
+                            <div class="mod-toggles" id="set-life-group">
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(1)" data-val="1">1</button>
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(2)" data-val="2">2</button>
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(3)" data-val="3">3</button>
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(4)" data-val="4">4</button>
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(5)" data-val="5">5</button>
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(6)" data-val="6">6</button>
+                                <button class="mod-toggle-btn" onclick="setLifeDiff(7)" data-val="7">7</button>
+                            </div>
+                        </div>
+                        <div id="settings-detailed-stats" class="det-stats-grid">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>Controls</h3>
+                        
+                        <!-- Visual Key Check -->
+                        <div class="key-test-area" id="key-test-area">
+                            <div class="key-test-col" id="test-col-0"></div>
+                            <div class="key-test-col" id="test-col-1"></div>
+                            <div class="key-test-col" id="test-col-2"></div>
+                            <div class="key-test-col" id="test-col-3"></div>
+                        </div>
+
+                        <div class="setting-row keybinds" style="justify-content:center; flex-direction:column; gap:10px;">
+                            <label style="font-size:0.9rem; color:#aaa; margin-bottom:5px;">Gameplay Columns</label>
                             <div class="key-inputs">
                                 <button id="key-btn-0" class="key-bind-btn" onclick="startKeyBind(0)">D</button>
                                 <button id="key-btn-1" class="key-bind-btn" onclick="startKeyBind(1)">F</button>
                                 <button id="key-btn-2" class="key-bind-btn" onclick="startKeyBind(2)">J</button>
                                 <button id="key-btn-3" class="key-bind-btn" onclick="startKeyBind(3)">K</button>
                             </div>
+
+                            <label style="font-size:0.9rem; color:#aaa; margin-top:10px; margin-bottom:5px;">System & Rates</label>
+                            <div class="system-key-grid">
+                                <button id="key-btn-pause" class="key-bind-btn wide" onclick="startKeyBind('pause')">Pause: Esc</button>
+                                <button id="key-btn-retry" class="key-bind-btn wide" onclick="startKeyBind('retry')">Retry: `</button>
+                                <button id="key-btn-rateUp" class="key-bind-btn wide" onclick="startKeyBind('rateUp')">Rate +: =</button>
+                                <button id="key-btn-rateDown" class="key-bind-btn wide" onclick="startKeyBind('rateDown')">Rate -: -</button>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="settings-footer">
-                <button class="close-btn" onclick="saveSettings()">Save & Close</button>
+                <div class="settings-footer">
+                    <button class="close-btn" onclick="saveSettings()">Save & Close</button>
+                </div>
             </div>
         </div>
 
@@ -606,6 +667,12 @@
                 <h3 id="hud-artist">Artist</h3>
             </div>
 
+            <div id="hud-top-left">
+                <div id="hud-difficulty-display"><span id="hud-val-diff">0.00</span></div>
+                <div id="hud-info-bpm">BPM: <span id="hud-val-bpm">150</span></div>
+                <div id="hud-info-rate">Rate: <span id="hud-val-rate">1.0x</span></div>
+            </div>
+
             <div id="judgment-tracker">
                 <div class="tracker-item judge-marvelous">MARV: <span id="count-marvelous">0</span></div>
                 <div class="tracker-item judge-perfect">PERF: <span id="count-perfect">0</span></div>
@@ -613,6 +680,8 @@
                 <div class="tracker-item judge-good">GOOD: <span id="count-good">0</span></div>
                 <div class="tracker-item judge-bad">BAD: <span id="count-bad">0</span></div>
                 <div class="tracker-item judge-miss">MISS: <span id="count-miss">0</span></div>
+                <div class="tracker-item judge-ok">OK: <span id="count-ok">0</span></div>
+                <div class="tracker-item judge-ng">NG: <span id="count-ng">0</span></div>
             </div>
 
             <div id="live-grade">AAA</div>
@@ -640,7 +709,13 @@
                 </div>
 
                 <div id="judgment"></div>
+                <div id="autoplay-indicator" style="display:none;">AUTOPLAY</div>
+                <div id="combination-display"> <!-- Placeholder if needed --> </div>
                 <div id="combo">0</div>
+                <div id="hud-tracker" style="display:none;">
+                    <span id="tracker-diff">+0.00%</span>
+                    <span id="tracker-target" class="sub-val">Target: 93.00%</span>
+                </div>
 
                 <div id="error-bar-container">
                     <div id="error-bar-center"></div>
@@ -677,7 +752,10 @@
                 <div class="res-left-panel">
                     <div class="res-grade-container">
                         <span id="res-grade">AAA</span>
-                        <span id="res-clear-type"></span>
+                        <div class="res-sub-labels">
+                            <span id="res-clear-type"></span>
+                            <span id="res-judge-label" style="display:none; font-size:0.8rem; color:#aaa; margin-left:8px;">J4</span>
+                        </div>
                     </div>
                     <div id="res-acc-box">
                         <span id="res-acc">0.00%</span>
@@ -708,6 +786,14 @@
                             </div>
                             <div class="res-judge-row judge-miss"><span>MISS</span>
                                 <div class="val-grp"><span id="res-count-miss">0</span> <span id="res-pct-miss"
+                                        class="sub-pct"></span></div>
+                            </div>
+                            <div class="res-judge-row judge-ok"><span>OK</span>
+                                <div class="val-grp"><span id="res-count-ok">0</span> <span id="res-pct-ok"
+                                        class="sub-pct"></span></div>
+                            </div>
+                            <div class="res-judge-row judge-ng"><span>NG</span>
+                                <div class="val-grp"><span id="res-count-ng">0</span> <span id="res-pct-ng"
                                         class="sub-pct"></span></div>
                             </div>
                         </div>
@@ -785,6 +871,7 @@
 
             <div class="pause-actions">
                 <button class="pause-btn resume" id="pause-resume-btn">RESUME</button>
+                <button class="pause-btn retry" id="pause-retry-btn" onclick="retryCurrentChart()">RETRY</button>
                 <button class="pause-btn quit" id="pause-quit-btn">QUIT</button>
             </div>
 

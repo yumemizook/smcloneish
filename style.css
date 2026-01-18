@@ -267,14 +267,15 @@ body {
     font-weight: bold;
 }
 
-.ss-tab-btn span {
-    /* Reset rotation */
-    display: inline-block;
-    transform: none;
-    white-space: nowrap;
-}
+
 
 .ss-tab-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.ss-tab-btn:focus {
+    outline: none;
     color: #fff;
     background: rgba(255, 255, 255, 0.05);
 }
@@ -374,7 +375,7 @@ body {
     position: absolute;
     left: 0;
     top: 0;
-    width: 250px;
+    width: 300px;
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -486,6 +487,7 @@ body {
     height: 100%;
     /* Fill available height */
     box-sizing: border-box;
+    margin-top: 10px;
 }
 
 .ss-calc-box h3 {
@@ -567,11 +569,24 @@ body {
     }
 }
 
-.setting-row {
-    display: flex;
-    align-items: center;
-    gap: 20px;
+
+.setting-group {
     margin-bottom: 30px;
+    text-align: center;
+}
+
+.setting-group h3 {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 5px;
+    margin-bottom: 15px;
+    display: block;
+}
+
+.setting-row-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
 }
 
 .setting-row label {
@@ -1110,7 +1125,7 @@ input[type=range]::-webkit-slider-runnable-track {
 #live-grade {
     position: absolute;
     left: 20px;
-    bottom: 280px;
+    bottom: 340px;
     font-size: 5rem;
     font-weight: 900;
     color: #ffe600;
@@ -1228,15 +1243,6 @@ input[type=range]::-webkit-slider-runnable-track {
     text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
 }
 
-#live-grade {
-    position: absolute;
-    left: 20px;
-    bottom: 280px;
-    font-size: 5rem;
-    font-weight: 900;
-    color: #ffe600;
-    text-shadow: 0 0 20px rgba(255, 230, 0, 0.5);
-}
 
 #combo {
     font-size: 5rem;
@@ -1259,12 +1265,32 @@ input[type=range]::-webkit-slider-runnable-track {
     margin-bottom: 20px;
 }
 
+#hud-tracker {
+    text-align: center;
+    margin-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+}
+
+#tracker-diff {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #fff;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+#tracker-target {
+    font-size: 0.8rem;
+    color: #aaa;
+    margin-top: 2px;
+}
+
 #error-bar-container {
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin-top: 10px;
+    margin-top: 20px;
 }
 
 #errorBarCanvas {
@@ -1403,7 +1429,6 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 
 .judge-good {
-    margin-top: 5px;
     text-shadow: 0 0 10px #005f9e;
 }
 
@@ -1458,23 +1483,12 @@ input[type=range]::-webkit-slider-runnable-track {
     justify-content: center;
 }
 
-.ss-tab-btn span {
-    display: block;
-    white-space: nowrap;
-    transform: rotate(90deg);
-    /* Explicit Rotation */
-}
 
 .ss-tab-btn:hover {
     color: #fff;
     background: rgba(255, 255, 255, 0.05);
 }
 
-.ss-tab-btn.active {
-    color: #000;
-    background: #00e5ff;
-    box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
-}
 
 /* Content Area - Flex Grow */
 .ss-tab-content {
@@ -1851,7 +1865,7 @@ input[type=range]::-webkit-slider-runnable-track {
     background: rgba(255, 255, 255, 0.05);
     padding: 30px;
     border-radius: 15px;
-    width: 300px;
+    width: 600px;
 }
 
 .setting-group h3 {
@@ -2038,6 +2052,8 @@ input[type=range]::-webkit-slider-runnable-track {
     padding: 5px 10px;
     border-radius: 4px;
 }
+
+
 
 .val-grp {
     text-align: right;
@@ -2498,6 +2514,8 @@ input[type=range]::-webkit-slider-runnable-track {
     font-weight: bold;
 }
 
+
+
 .judge-marvelous {
     color: #a3f7ff;
 }
@@ -2864,12 +2882,6 @@ input[type=range]::-webkit-slider-runnable-track {
     border-color: #666;
 }
 
-.ss-tab-btn.active {
-    background: #00e5ff;
-    color: #000;
-    border-color: #00e5ff;
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
-}
 
 /* Tabs Content */
 .ss-tab-content {
@@ -3008,73 +3020,93 @@ input[type=range]::-webkit-slider-runnable-track {
     overflow: hidden;
 }
 
-/* Tilted Text Logic */
-.ss-tab-btn span {
-    writing-mode: vertical-rl;
-    text-orientation: mixed;
-    /* Or upright, or mixed for rotated 90deg text? */
-    transform: rotate(180deg);
-    /* If writing-mode causes bottom-to-top */
-    /* vertical-rl starts top-right. We want text reading top-bottom or bottom-top? */
-    /* "90-degree tilted text". Usually implies reading bottom-up or top-down. */
-    /* Standard vertical reading: top-down. */
-    white-space: nowrap;
-}
-
 /* Adjust active state */
-.ss-tab-btn.active {
-    background: #00e5ff;
-    color: #000;
-    border-color: #00e5ff;
-    width: 45px;
-    /* Slight pop */
-    margin-right: -5px;
-    /* Overlap effect? Or just stand out */
-}
 
 /* --- Detailed Leaderboard --- */
 
-.lb-entry {
-    background: rgba(0, 0, 0, 0.4);
-    border-left: 4px solid #fff;
-    /* Default, overridden via JS */
-    color: #fff;
-    padding: 10px;
-    display: grid;
-    /* Rank, Score, Grade, Acc, ClearType, Judgments */
-    grid-template-columns: 40px 100px 50px 80px 50px 1fr;
-    grid-gap: 10px;
-    align-items: center;
-    border-radius: 0 5px 5px 0;
-    margin-bottom: 5px;
-    transition: transform 0.1s;
+.ss-lb-item {
+    margin-bottom: 6px;
+    border-radius: 6px;
+    /* Background and border-left set inline */
+    display: flex;
+    flex-direction: column;
+    padding: 8px 12px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    /* Subtle border for definition */
 }
 
-.lb-entry:hover {
-    background: rgba(255, 255, 255, 0.1);
+.ss-lb-main-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
 }
 
-.lb-rank {
-    color: #888;
-    font-size: 0.9rem;
+.ss-lb-rank {
+    font-size: 1.2rem;
     font-weight: bold;
+    color: rgba(255, 255, 255, 0.5);
+    width: 35px;
+    font-family: 'Mochiy Pop One', sans-serif;
 }
 
-.lb-score {
+.ss-lb-score {
+    font-family: 'Mochiy Pop One', sans-serif;
+    font-size: 1.5rem;
     color: #fff;
-    font-family: monospace;
-    font-size: 1.1rem;
+    text-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+    letter-spacing: 1px;
 }
 
-.lb-grade {
+.ss-lb-details-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ss-lb-meta {
+    display: flex;
+    flex-direction: column;
+}
+
+.ss-lb-grade {
+    font-size: 1.4rem;
     font-weight: bold;
     font-family: 'Mochiy Pop One', sans-serif;
     text-shadow: 0 0 5px currentColor;
+    line-height: 1;
 }
 
-.lb-acc {
-    color: #ccc;
+.ss-lb-acc {
     font-size: 0.9rem;
+    color: #ddd;
+    margin-top: 2px;
+}
+
+.ss-lb-judgments {
+    display: flex;
+    gap: 12px;
+}
+
+.ss-lb-judge-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.ss-judge-label {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.4);
+    margin-bottom: 2px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+.ss-judge-val {
+    font-size: 1.0rem;
+    font-weight: bold;
+    font-family: 'Mochiy Pop One', sans-serif;
 }
 
 .lb-clear {
@@ -3165,30 +3197,12 @@ input[type=range]::-webkit-slider-runnable-track {
     /* Taller for vertical text */
     writing-mode: vertical-rl;
     text-orientation: upright;
-    /* Or mixed/sideways? Upright for CJK, but for English usually rotate 90deg? 
-                                  User said "flip direction". vertical-rl makes text flow top-top-bottom. 
-                                  Let's try standard rotation instead if we want "sideways" text. 
-                                  If user wants "Vertical Text" (stacked letters), upright is good. 
-                                  If user wants "Rotated Text", transform is better. 
-                                  "flip the direction of the tab button text" usually means rotated 90deg.
-                               */
-    writing-mode: vertical-rl;
-    text-orientation: mixed;
-    /* Letters rotated 90deg */
     font-family: 'Mochiy Pop One', sans-serif;
     font-size: 0.9rem;
     letter-spacing: 2px;
     transform: rotate(180deg);
-    /* If writing mode puts it wrong way? 
-                                  vertical-rl flows R->L. English text points DOWN. 
-                                  Rotate 180 makes it point UP. */
 }
 
-/* Cancel rotation for transform if using writing-mode? 
-   Actually, `writing-mode: vertical-rl` makes English text read Top-to-Bottom, rotated 90deg CW. 
-   Usually tabs on right read Bottom-to-Top (Rotated 90deg CCW).
-   Use transform: rotate(-90deg) on the span might be easier than writing-mode for predictable results across browsers.
-*/
 .ss-tab-btn {
     writing-mode: horizontal-tb;
     /* Reset */
@@ -3200,7 +3214,7 @@ input[type=range]::-webkit-slider-runnable-track {
 
 .ss-tab-btn span {
     display: block;
-    transform: rotate(-90deg);
+    transform: rotate(90deg);
     white-space: nowrap;
     width: 100px;
     /* Ensure width for rotation context */
@@ -3221,11 +3235,7 @@ input[type=range]::-webkit-slider-runnable-track {
     border: 1px solid #333;
 }
 
-.ss-sidebar .ss-tab-btn.active {
-    color: #000;
-    border-color: #00e5ff;
-    /* Active styling already exists, just ensuring font/color override */
-}
+
 
 
 /* --- Leaderboard Logic --- */
@@ -3321,4 +3331,301 @@ input[type=range]::-webkit-slider-runnable-track {
     border-radius: 50%;
     background: #00e5ff;
     cursor: pointer;
+}
+
+/* Autoplay Indicator */
+#autoplay-indicator {
+    position: absolute;
+    top: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 2.5rem;
+    font-weight: 900;
+    color: #00e5ff;
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.8), 0 0 20px rgba(0, 229, 255, 0.4);
+    letter-spacing: 5px;
+    z-index: 100;
+    animation: pulse-autoplay 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-autoplay {
+
+    0%,
+    100% {
+        opacity: 0.7;
+        transform: translateX(-50%) scale(1);
+    }
+
+    50% {
+        opacity: 1;
+        transform: translateX(-50%) scale(1.05);
+    }
+}
+
+/* Top Left HUD Info */
+#hud-top-left {
+    position: absolute;
+    top: 40px;
+    left: 20px;
+    text-align: left;
+    color: #fff;
+    font-family: 'Mochiy Pop One', cursive;
+    font-size: 1.2rem;
+    line-height: 1.5;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+#hud-top-left div {
+    margin-bottom: 5px;
+}
+
+/* Large Difficulty Display */
+#hud-difficulty-display {
+    font-size: 4rem;
+    font-weight: bold;
+    color: #ffeb3b;
+    text-shadow: 0 0 10px rgba(255, 235, 59, 0.8), 2px 2px 4px rgba(0, 0, 0, 0.9);
+    margin-bottom: 10px;
+    line-height: 1;
+}
+
+#hud-val-bpm,
+#hud-val-rate {
+    font-weight: bold;
+    color: #ffeb3b;
+}
+
+/* OK / NG Colors */
+.judge-ok {
+    color: #ccff00;
+}
+
+/* Yellow-Green */
+.judge-ng {
+    color: #ff33cc;
+}
+
+/* Pink/Purple */
+
+/* Results Screen OK/NG */
+.res-judge-row.judge-ok span {
+    color: #ccff00;
+    text-shadow: 0 0 5px rgba(204, 255, 0, 0.5);
+}
+
+.res-judge-row.judge-ng span {
+    color: #ff33cc;
+    text-shadow: 0 0 5px rgba(255, 51, 204, 0.5);
+}
+
+/* Pause Menu Retry Button */
+.pause-btn.retry {
+    background: #ff9800;
+    color: #000;
+}
+
+.pause-btn.retry:hover {
+    background: #ffb300;
+    box-shadow: 0 0 20px rgba(255, 152, 0, 0.5);
+}
+
+/* --- Detailed Settings Stats --- */
+.det-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    /* Force 2 Columns */
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 15px;
+    width: 100%;
+}
+
+.det-stat-item {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 10px 15px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+/* Widen the toggle groups in settings */
+#settings-modal .mod-toggles {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+}
+
+#settings-modal .mod-toggle-btn {
+    flex: 1;
+    /* Distribute evenly */
+    min-width: 40px;
+}
+
+.det-stat-label {
+    font-size: 0.85rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+    letter-spacing: 0.5px;
+}
+
+.det-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    color: #bbb;
+}
+
+.det-stat-row span:last-child {
+    font-weight: bold;
+    color: #fff;
+}
+
+/* --- Professional Controls Styling --- */
+
+/* Key Test Area */
+.key-test-area {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-bottom: 25px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.2) 100%);
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.key-test-col {
+    width: 60px;
+    height: 80px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    transition: all 0.05s ease-out;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+    position: relative;
+}
+
+/* Lane coloring */
+#test-col-0 {
+    border-color: #33aaff;
+}
+
+/* Left - Blue */
+#test-col-1 {
+    border-color: #ff33aa;
+}
+
+/* Down - Pink */
+#test-col-2 {
+    border-color: #ff33aa;
+}
+
+/* Up - Pink */
+#test-col-3 {
+    border-color: #33aaff;
+}
+
+/* Right - Blue */
+
+.key-test-col.active {
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 25px currentColor;
+    transform: translateY(2px);
+}
+
+#test-col-0.active {
+    background: #33aaff;
+    box-shadow: 0 0 30px #33aaff;
+}
+
+#test-col-1.active {
+    background: #ff33aa;
+    box-shadow: 0 0 30px #ff33aa;
+}
+
+#test-col-2.active {
+    background: #ff33aa;
+    box-shadow: 0 0 30px #ff33aa;
+}
+
+#test-col-3.active {
+    background: #33aaff;
+    box-shadow: 0 0 30px #33aaff;
+}
+
+/* Keybind Buttons */
+.key-bind-btn {
+    background: linear-gradient(180deg, #333 0%, #222 100%);
+    border: 1px solid #444;
+    color: #eee;
+    padding: 12px 15px;
+    min-width: 60px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'Mochiy Pop One', sans-serif;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    text-align: center;
+}
+
+.key-bind-btn:hover {
+    background: linear-gradient(180deg, #444 0%, #333 100%);
+    border-color: #666;
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.key-bind-btn.binding {
+    background: #ffaa00;
+    color: #000;
+    border-color: #ffcc00;
+    animation: pulseBinding 1s infinite;
+}
+
+@keyframes pulseBinding {
+    0% {
+        box-shadow: 0 0 5px #ffaa00;
+    }
+
+    50% {
+        box-shadow: 0 0 15px #ffaa00;
+    }
+
+    100% {
+        box-shadow: 0 0 5px #ffaa00;
+    }
+}
+
+.key-inputs {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.system-key-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 60%;
+    /* Constrain width */
+    margin: 0 auto;
+    /* Center */
+}
+
+.key-bind-btn.wide {
+    width: 100%;
+    /* Fill grid cell */
+    font-size: 0.8rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }

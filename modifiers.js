@@ -12,6 +12,12 @@ const modConfig = {
     rate: 1.0,
     pitchShift: true,
 
+    // Target Tracker
+    targetTracker: false,
+    targetTrackerMode: 'percent', // 'percent', 'pb'
+    targetTrackerVal: 93.00, // Percentage
+
+
     // Scroll
     scrollDirection: 'up', // 'up', 'down'
     scrollType: 'standard', // 'standard', 'split' (future)
@@ -115,6 +121,12 @@ function updateModifiersUI() {
     updateToggle('mod-pitch', modConfig.pitchShift ? 'on' : 'off');
     updateToggle('mod-scroll-dir', modConfig.scrollDirection);
 
+    // --- TARGET TRACKER ---
+    let trackerState = modConfig.targetTracker ? modConfig.targetTrackerMode : 'off';
+    updateToggle('mod-tracker', trackerState);
+    document.getElementById('mod-tracker-val-display').innerText = modConfig.targetTrackerVal.toFixed(2) + "%";
+
+
     // --- DISPLAY / APPEARANCE ---
     updateToggle('mod-appear-type', modConfig.appearance.type);
     document.getElementById('mod-appear-offset-val').innerText = modConfig.appearance.offset + "%";
@@ -165,6 +177,79 @@ function changeRateVal(delta) {
 }
 window.changeRateVal = changeRateVal;
 
+function changeTrackerVal(dir) {
+    let v = modConfig.targetTrackerVal;
+
+    // Logic: 
+    // 1% steps until 99%
+    // 0.1% steps until 99.9%
+    // 99.955, 99.96 .. 99.99
+    // 99.9935, 100%
+
+    // We implement simpler "next step" logic based on current value ranges
+    // Since floating point math can be messy, we round carefully.
+
+    const steps = [
+        { max: 99.0, step: 1.0 },
+        { max: 99.9, step: 0.1 },
+        { max: 99.99, step: 0.01 }, // Covers 99.955 approximately as granular step or just use explicit values?
+        // User specific: "then 99.955, then 99.96 to 99.99, then 99.9935 and 100%"
+        // This is highly specific. Let's implement an array of milestones for the upper end or a smart stepper.
+    ];
+
+    // Let's use a robust approach: define precise breakpoints for high values.
+    // Below 99: integers. 
+    // 99.0 - 99.9: 0.1
+
+    let next = v;
+
+    if (dir > 0) {
+        if (v < 99.0) next = Math.floor(v) + 1;
+        else if (v < 99.9 - 0.0001) next = v + 0.1;
+        else if (v < 99.955 - 0.0001) next = 99.955;
+        else if (v < 99.96 - 0.0001) next = 99.96;
+        else if (v < 99.99 - 0.0001) next = v + 0.01;
+        else if (v < 99.9935 - 0.0001) next = 99.9935;
+        else next = 100.0;
+    } else {
+        if (v > 99.9935 + 0.0001) next = 99.9935;
+        else if (v > 99.99 + 0.0001) next = 99.99;
+        else if (v > 99.96 + 0.0001) next = v - 0.01;
+        else if (v > 99.955 + 0.0001) next = 99.955; // Wait, 99.96 - 0.01 = 99.95. User asked 99.955.
+        // Let's refine the high end logic.
+        // Ranges:
+        // ... 99.8, 99.9
+        // 99.9 -> 99.955
+        // 99.955 -> 99.96
+        // 99.96, 99.97, 99.98, 99.99
+        // 99.99 -> 99.9935
+        // 99.9935 -> 100.0
+
+        if (v > 100 - 0.0001) next = 99.9935;
+        else if (v > 99.9935 - 0.0001 && v <= 100) next = 99.9935; // If at 100 go down
+        else if (v > 99.99 - 0.0001) next = 99.99; // If at 99.9935 go down
+        else if (v > 99.96 + 0.0001) next = v - 0.01; // 99.99 down to 99.96
+        else if (v > 99.955 + 0.0001) next = 99.955; // 99.96 down
+        else if (v > 99.9 + 0.0001) next = 99.9; // 99.955 down
+        else if (v > 99.0 + 0.0001) next = v - 0.1;
+        else next = Math.ceil(v) - 1;
+    }
+
+    // Fix precision issues
+    // Clamp to valid range (0 to 100)
+    if (next > 100) next = 100;
+    if (next < 0) next = 0;
+
+    // Formatting/Smoothing
+    // Rounding helps align to expected steps (e.g. 98.9999 -> 99.0)
+    if (next < 99) next = Math.round(next);
+    else next = parseFloat(next.toFixed(4));
+
+    modConfig.targetTrackerVal = next;
+    updateModifiersUI();
+}
+window.changeTrackerVal = changeTrackerVal;
+
 function setModifier(cat, val, subParam) {
     // General setter
     if (cat === 'speedType') {
@@ -179,6 +264,15 @@ function setModifier(cat, val, subParam) {
         if (typeof setupCanvas === 'function') setupCanvas();
     }
     if (cat === 'pitchShift') modConfig.pitchShift = (val === 'on');
+
+    if (cat === 'targetTracker') {
+        if (val === 'off') {
+            modConfig.targetTracker = false;
+        } else {
+            modConfig.targetTracker = true;
+            modConfig.targetTrackerMode = val;
+        }
+    }
 
     // Appearance
     if (cat === 'appearType') modConfig.appearance.type = val;
@@ -235,7 +329,7 @@ function loadModifiers() {
             if (parsed.effect) modConfig.effect = parsed.effect;
 
             // Primitives
-            ['speedType', 'speedValue', 'failMode', 'rate', 'pitchShift', 'scrollDirection', 'turn'].forEach(k => {
+            ['speedType', 'speedValue', 'failMode', 'pitchShift', 'scrollDirection', 'turn', 'targetTracker', 'targetTrackerMode', 'targetTrackerVal'].forEach(k => {
                 if (parsed[k] !== undefined) modConfig[k] = parsed[k];
             });
 
