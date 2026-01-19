@@ -52,6 +52,12 @@ const BASE_J_GREAT = 90;
 const BASE_J_GOOD = 135;
 const BASE_J_BAD = 180;
 const BASE_J_MISS_WINDOW = 180;
+const J_MARVELOUS = BASE_J_MARVELOUS; // Alias for legacy/global access
+const J_PERFECT = BASE_J_PERFECT; // Alias for legacy/global access
+const J_GREAT = BASE_J_GREAT; // Alias for legacy/global access
+const J_GOOD = BASE_J_GOOD; // Alias for legacy/global access
+const J_BAD = BASE_J_BAD; // Alias for legacy/global access
+const J_MISS_WINDOW = BASE_J_MISS_WINDOW; // Alias for legacy/global access
 const J_MINE_WINDOW = 75; // Fixed
 
 function getTimingWindow(windowName, judgeDiffOverride) {
@@ -1025,13 +1031,56 @@ function selectDifficulty(chartIndex) {
             if (Math.abs((top.rate || 1.0) - currentRate) > 0.001) {
                 displayScore += ` (${(top.rate || 1.0).toFixed(2)}x)`;
             }
-            setText('bs-score', displayScore);
+            // setText handled below with tooltip logic
 
             // Info Col
             // Acc Formatting: >= 99.7 used 4 decimals, else 2
             const accVal = parseFloat(top.acc);
             const accText = accVal >= 99.7 ? accVal.toFixed(4) : accVal.toFixed(2);
-            setText('bs-acc', accText + "%");
+
+            // Set Text
+            const bsScoreEl = document.getElementById('bs-score');
+            const bsAccEl = document.getElementById('bs-acc');
+
+            const origScoreTxt = displayScore;
+            const origAccTxt = accText + "%";
+
+            bsScoreEl.innerText = origScoreTxt;
+            bsAccEl.innerText = origAccTxt;
+
+            // Cleanup old listeners (Clone to wipe)
+            const newScoreEl = bsScoreEl.cloneNode(true);
+            const newAccEl = bsAccEl.cloneNode(true);
+            bsScoreEl.parentNode.replaceChild(newScoreEl, bsScoreEl);
+            bsAccEl.parentNode.replaceChild(newAccEl, bsAccEl);
+
+            // J4 Hover Logic
+            if (top.j4Dp && top.j4Acc) {
+                const j4ScoreTxt = top.j4Dp; // Already fixed 2 decimals? Check definition. 
+                const j4AccTxt = top.j4Acc + "%"; // j4Acc is string fixed(4)
+
+                const setHover = (active) => {
+                    newScoreEl.innerText = active ? j4ScoreTxt : origScoreTxt;
+                    newAccEl.innerText = active ? j4AccTxt : origAccTxt;
+                    newScoreEl.style.color = active ? '#88ccff' : '';
+                    newAccEl.style.color = active ? '#88ccff' : '';
+                };
+
+                newScoreEl.onmouseenter = () => setHover(true);
+                newScoreEl.onmouseleave = () => setHover(false);
+                newAccEl.onmouseenter = () => setHover(true);
+                newAccEl.onmouseleave = () => setHover(false);
+
+                newScoreEl.style.cursor = "pointer";
+                newAccEl.style.cursor = "pointer";
+                newScoreEl.title = "Hover to view J4 converted stats";
+                newAccEl.title = "Hover to view J4 converted stats";
+            } else {
+                newScoreEl.style.cursor = "default";
+                newAccEl.style.cursor = "default";
+                newScoreEl.title = "";
+                newAccEl.title = "";
+            }
 
             setText('bs-ssr', (top.ssr || 0).toFixed(2));
             // Use saved FC Type (Fail/Invalid support) or calculate legacy
@@ -1371,8 +1420,13 @@ function getClearType() {
 
 function updateScoreDisplay() {
     let acc = 0;
-    const divisor = gameState.totalNotesHitOrMissed * 2;
-    if (divisor > 0) acc = gameState.accumulatedAccuracyPoints / divisor;
+    const count = gameState.totalNotesHitOrMissed || 1;
+    // accumulatedAccuracyPoints is sum of 0-100 scores.
+    // Average Score = Sum / Count (e.g. 99.5)
+    // Acc Fraction (for grade/display logic expecting 0.0-1.0) = Avg / 100.
+    if (gameState.totalNotesHitOrMissed > 0) {
+        acc = (gameState.accumulatedAccuracyPoints / count) / 100;
+    }
     const displayScore = Math.round(gameState.score);
     const displayAccPercent = (acc * 100).toFixed(4);
 
@@ -1515,12 +1569,12 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
             // Hit Logic
             if (absOffset <= getTimingWindow('marvelous')) {
                 judgeText = "MARVELOUS"; judgeClass = "judge-marvelous"; breaksCombo = false;
-                scoreAdd = (1000000 / Math.max(1, gameState.totalNotesInChart)) + 10;
+                scoreAdd = (1000000 / Math.max(1, gameState.totalNotesInChart));
                 gameState.judgments.marvelous++; lifeChange = 1.0 * gainMult;
             }
             else if (absOffset <= getTimingWindow('perfect')) {
                 judgeText = "PERFECT"; judgeClass = "judge-perfect"; breaksCombo = false;
-                scoreAdd = (1000000 / Math.max(1, gameState.totalNotesInChart));
+                scoreAdd = (1000000 / Math.max(1, gameState.totalNotesInChart)) - 10;
                 gameState.judgments.perfect++; lifeChange = 0.8 * gainMult;
             }
             else if (absOffset <= getTimingWindow('great')) {
@@ -1547,19 +1601,40 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         }
 
         // DP / Acc Points Calculation
-        // Standardize: Marv=3, Perf=2, Great=1, Good=0, Bad=-4, Miss=-8 ? 
-        // Existing code used simple: 100% based? 
-        // Let's keep existing accumulator logic but cleaned.
-        // Assuming Marv=3pts, Perf=2pts...
-        // Actually, existing code used `gameState.accumulatedAccuracyPoints`
-        // Let's approximate based on JUDGMENT not just offset to be safe with dynamic windows.
-        if (judgeText === "MARVELOUS") gameState.accumulatedAccuracyPoints += 3;
-        else if (judgeText === "PERFECT") gameState.accumulatedAccuracyPoints += 2;
-        else if (judgeText === "GREAT") gameState.accumulatedAccuracyPoints += 1;
-        else if (judgeText === "GOOD") gameState.accumulatedAccuracyPoints += 0;
-        else if (judgeText === "BAD") gameState.accumulatedAccuracyPoints += -4;
-        else if (judgeText === "MISS") gameState.accumulatedAccuracyPoints += -8;
+        // New Logic: Use calculateAccuracy(offset) for curve-based scoring (0-100 per note)
+        // Miss/Bad are negative in calculateAccuracy, but we accumulate them directly.
+        // NOTE: calculateAccuracy handles offset logic.
 
+        let accScore = 0;
+        if (isMiss && note.type !== 'mine') {
+            // For Miss, we pass a large offset or handle explicitly?
+            // calculateAccuracy returns -275 for > 180ms.
+            // Miss window is 180ms usually. 
+            // Let's rely on a proxy offset or just hardcode the miss penalty from the function?
+            // calculateAccuracy(181) -> -275 approx.
+            accScore = calculateAccuracy(1000); // effectively infinite -> -275
+        } else if (note.type === 'mine') {
+            accScore = -500; // Keep mine separate? Or use calculateAccuracy? Mine logic usually distinct.
+            // Previous code: accumulatedAccuracyPoints += -7.0; 
+            // Let's keep -7.0 for Mine as it's not timed usually in the same curve way?
+            // User wants "Accuracy" generally. 
+            // Let's use the explicit value for mine to preserve existing logic if calculateAccuracy doesn't cover mines (it checks timing).
+            // calculateAccuracy checks offset. Mine hit offset < 75. 
+            // If we used it, we'd get positive points for hitting a mine (bad!).
+            // So hardcode Mine penalty.
+            accScore = -500; // Wait, previous was -7.0 acc points. 
+            // Note: -500 was scoreAdd.
+            // accPoints was -7.
+            // We need to scale -7 to the new 0-100 system?
+            // Old system: Max 3. -7 is ~ -2.3x Max.
+            // New system: Max 100. -2.3x = -230.
+            // Let's use -230 for Mine accumulator.
+            accScore = -230;
+        } else {
+            accScore = calculateAccuracy(offsetMs);
+        }
+
+        gameState.accumulatedAccuracyPoints += accScore;
         gameState.totalNotesHitOrMissed++;
         scoreAdd = Math.max(0, scoreAdd); gameState.score += scoreAdd;
 
@@ -1574,7 +1649,7 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         });
     }
 
-    const currentAcc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed * 2)) * 100 : 100;
+    const currentAcc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / gameState.totalNotesHitOrMissed) : 100;
     gameState.accuracyHistory.push({ time: (audioCtx.currentTime - gameState.startTime), acc: currentAcc, grade: getGrade(currentAcc) });
 
     if (breaksCombo) gameState.combo = 0; else if (note.type !== 'mine') gameState.combo++;
@@ -1609,18 +1684,39 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 
     // TARGET TRACKER UPDATE
     if (gameState.totalNotesHitOrMissed > 0 && modConfig.targetTracker) {
-        // DP Differential Logic
-        // Target DP = (Max Points So Far) * (Target Percent / 100)
-        const maxPointsSoFar = gameState.totalNotesHitOrMissed * 2;
-        const targetDP = maxPointsSoFar * (gameState.targetTrackerTarget / 100);
-        const currentDP = gameState.accumulatedAccuracyPoints;
+        // DP Differential Logic (Scale 0 -> Total*2)
+        // Target DP = (Max Potential DP) * (Target Percent / 100)
+        // Max Potential DP = TotalNotes * 2 (as requested)
+
+        const maxPotDP = gameState.totalNotesInChart * 2; // Fixed Total for chart
+        // Actually tracker is usually "Notes So Far"?
+        // If we want "Current Pace" vs "Target Pace", we use Notes Hit So Far.
+        const currentRefMax = gameState.totalNotesHitOrMissed * 2;
+
+        // Current DP (Cumulative)
+        // Derived from Acc%: (Acc% / 100) * currentRefMax
+        // Acc% is (accumulatedAccuracyPoints / gameState.totalNotesHitOrMissed)
+        // So: ((Accum / Count) / 100) * (Count * 2) = (Accum / 100) * 2
+        // Wait. accumulatedAccuracyPoints is on 0-100 scale.
+        // So Accum/100 is "Raw Score Sum" (0-1 scale).
+        // Multiplied by 2 -> "Raw Score Sum" * 2.
+
+        // Simplified: (accumulatedAccuracyPoints / 100) * 2.
+        // This gives exactly the Cumulative DP on a 0-2 scale per note.
+
+        const currentDP = (gameState.accumulatedAccuracyPoints / 100) * 2;
+
+        // Target DP (Cumulative)
+        // Target is Percentage (e.g. 95%).
+        // Target DP = (Target% / 100) * currentRefMax.
+        const targetDP = (gameState.targetTrackerTarget / 100) * currentRefMax;
 
         const diff = currentDP - targetDP;
         const diffEl = document.getElementById('tracker-diff');
 
         if (diffEl) {
             const sign = diff >= 0 ? "+" : "";
-            // Display raw point difference (e.g. +1.50)
+            // Display raw point difference (e.g. +0.05)
             diffEl.innerText = `${sign}${diff.toFixed(2)}`;
 
             // Color Logic
@@ -1958,40 +2054,51 @@ function handleLeaderboard() {
     let lb = [];
     try { lb = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { }
 
-    let denominator = gameState.totalNotesHitOrMissed * 2;
-    if (gameState.failed) {
-        denominator = gameState.totalNotesInChart * 2;
-    }
-    const acc = denominator > 0 ? gameState.accumulatedAccuracyPoints / denominator : 0;
+    // Correct Acc Logic: Accumulated (0-100) / Count = Avg Score (0-100)
+    // entry.acc expects "99.50" string.
+    const count = gameState.totalNotesHitOrMissed || 1;
+    const accPct = gameState.totalNotesHitOrMissed > 0 ? gameState.accumulatedAccuracyPoints / count : 0;
 
-    // DP Score
-    const dpScore = gameState.accumulatedAccuracyPoints;
+    // DP Score Logic: (Acc% / 100) * (Total * 2)
+    const total = gameState.totalNotesInChart || 1;
+    const dpScoreVal = (accPct / 100) * (total * 2);
 
-    // Calculate extra stats
+    // Calc Stats
+    // J4 Normalization for Save
+    const baseNoteScore = 1000000 / Math.max(1, gameState.totalNotesInChart || 1);
+    const j4Stats = recalculateStatsInternal(gameState.detailedHits, 4, baseNoteScore);
+    const j4DpVal = (j4Stats.acc / 100) * (gameState.totalNotesInChart * 2);
+
+    // Calc Stats (Use J4 for Validity/SSR)
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
 
-    // Determine Clear Type and SSR
-    let fcType = getClearType();
-    let ssr = calculateSSR(diff, acc);
+    // Strict J4 Validation
+    let fcType = getFCType(j4Stats.judgments, j4Stats.grade);
+    let ssr = calculateSSR(diff, j4Stats.acc / 100);
 
     if (gameState.failed) {
         fcType = "Fail";
         ssr = 0;
-    } else if ((acc * 100) < 83 || gameState.hasPausedDuringPlay) {
-        fcType = "Invalid"; // Invalid Clear
+    } else if (j4Stats.acc < 83 || gameState.hasPausedDuringPlay) {
+        fcType = "Invalid"; // Invalid if J4 < 83%
     }
+    // Note: Played 'accPct' is still saved as 'acc', but validity relies on J4.
 
     const entry = {
         score: Math.round(gameState.score),
-        dpScore: dpScore.toFixed(2), // Save DP Score
-        grade: gameState.failed ? "F" : getGrade(acc * 100),
-        acc: (acc * 100).toFixed(4), // Use 4 decimal points
-        date: Date.now(), // Save raw timestamp
-        rate: (typeof modConfig !== 'undefined' ? modConfig.rate : 1.0), // Save Rate
-        sd: calculateSD(gameState.hitOffsets).toFixed(2), // Save SD
+        dpScore: dpScoreVal.toFixed(2), // Save DP Score calculated from Acc
+        grade: gameState.failed ? "F" : getGrade(accPct),
+        acc: accPct.toFixed(4), // Save 0-100 directly
+        date: Date.now(),
+        rate: (typeof modConfig !== 'undefined' ? modConfig.rate : 1.0),
+        sd: calculateSD(gameState.hitOffsets).toFixed(2),
         judgments: gameState.judgments,
         ssr: ssr,
-        fcType: fcType
+        fcType: fcType,
+        // New Metadata
+        judgeDiff: userConfig.judgeDifficulty || 4,
+        j4Acc: j4Stats.acc.toFixed(4),
+        j4Dp: j4DpVal.toFixed(2)
     };
 
     lb.push(entry);
@@ -2007,9 +2114,47 @@ function handleLeaderboard() {
         lb.forEach((entry, i) => {
             const div = document.createElement('div');
             div.className = 'lb-entry';
+
             // Display DP Score instead of Standard Score
             const displayScore = entry.dpScore ? parseFloat(entry.dpScore).toFixed(2) : "0.00";
-            div.innerHTML = `<span class="lb-rank">#${i + 1}</span><span class="lb-score">${displayScore}</span><span class="lb-grade">${entry.grade}</span><span class="lb-acc">${entry.acc}%</span>`;
+            const origAcc = entry.acc + "%";
+
+            // Judge Badge if saved
+            const jBadge = entry.judgeDiff ? `<span style="font-size:0.7em; color:#666; margin-left:5px">J${entry.judgeDiff}</span>` : "";
+
+            div.innerHTML = `
+                <span class="lb-rank">#${i + 1}</span>
+                <span class="lb-score">${displayScore}</span>
+                <span class="lb-grade">${entry.grade}${jBadge}</span>
+                <span class="lb-acc">${origAcc}</span>
+            `;
+
+            // Hover Logic
+            if (entry.j4Dp && entry.j4Acc) {
+                const sEl = div.querySelector('.lb-score');
+                const aEl = div.querySelector('.lb-acc');
+
+                const j4Score = entry.j4Dp;
+                const j4Acc = entry.j4Acc + "%";
+
+                const setHover = (active) => {
+                    sEl.innerText = active ? j4Score : displayScore;
+                    aEl.innerText = active ? j4Acc : origAcc;
+                    sEl.style.color = active ? '#88ccff' : '';
+                    aEl.style.color = active ? '#88ccff' : '';
+                };
+
+                sEl.onmouseenter = () => setHover(true);
+                sEl.onmouseleave = () => setHover(false);
+                aEl.onmouseenter = () => setHover(true);
+                aEl.onmouseleave = () => setHover(false);
+
+                sEl.style.cursor = "pointer";
+                aEl.style.cursor = "pointer";
+                sEl.title = "J4 Converted";
+                aEl.title = "J4 Converted";
+            }
+
             list.appendChild(div);
         });
     }
@@ -2023,12 +2168,35 @@ function showResults() {
     gameState.isPlaying = false;
 
     // Accuracy Calculation
-    let denominator = gameState.totalNotesHitOrMissed * 2;
-    if (gameState.failed) {
-        // If failed, ratio against the WHOLE chart (Max DP)
-        denominator = gameState.totalNotesInChart * 2;
-    }
-    const acc = denominator > 0 ? gameState.accumulatedAccuracyPoints / denominator : 0;
+    // Logic: accumulatedAccuracyPoints is now Sum(0-100 scale).
+    // result = Sum / (Count * 100).
+    const count = gameState.totalNotesHitOrMissed || 1;
+    let baseAcc = gameState.accumulatedAccuracyPoints / count; // Avg Score (0-100 technically, can be negative)
+    // Actually, calculateAccuracy returns up to 100.
+    // So 'baseAcc' is the average score per note (e.g. 99.5).
+    // The "Accuracy Percentage" IS this average score.
+    // Wait, if calculateAccuracy(0) = 100. Then Avg = 100.
+    // So Acc% = baseAcc.
+    // However, failing can drag it down.
+
+    // Safety clamp (though negatives are allowed technically in Wife?)
+    // User interface usually expects 0-100%.
+    // Let's not clamp strictly 0, but usually display logic handles it?
+    // Let's use it directly.
+
+    // DP Score Calculation:
+    // User Request: (Acc% / 100) * 2 * TotalNotes.
+    // Acc% = baseAcc.
+    // DP = (baseAcc / 100) * (gameState.totalNotesInChart * 2).
+
+    // Handle specific fail logic if requested (usually Fails are just Fails).
+
+    const accPct = baseAcc;
+    const total = gameState.totalNotesInChart;
+
+    // DP Points (per user request: Max is 2 * TotalNotes)
+    // Formula: (Acc% / 100) * (2 * TotalNotes)
+    const dpPoints = (accPct / 100) * (total * 2);
 
     setScreen('results-screen');
     document.getElementById('gameCanvas').style.display = 'none';
@@ -2044,19 +2212,30 @@ function showResults() {
     setText('res-song-artist', gameState.meta.artist);
 
     const stats = calculateDetailedStats();
-    const total = gameState.totalNotesInChart;
-    const accPct = acc * 100;
+    // total and accPct are already calculated above (Renamed/Consolidated)
+    // Legacy Removal: const total = ... const accPct = ...
+
+    // DP Points derived earlier as 'dpPoints'.
+    // Need to ensure 'acc' variable is compatible if used elsewhere? 
+    // 'acc' was used for SSR calc? 
+    // SSR uses fraction (0.0-1.0)? Or Percent?
+    // calculateSSR(diff, acc): Line 2060.
+    // Original 'acc' was 0.0-1.0 fraction.
+    // My 'baseAcc' is 0.0-100.0.
+    // So pass 'baseAcc / 100' or just 'accPct / 100'.
+    const accFraction = accPct / 100;
 
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
 
     // Determine Clear Type and SSR
     let clearType = getClearType();
-    let ssr = calculateSSR(diff, acc);
+    let ssr = calculateSSR(diff, accFraction);
 
     if (gameState.failed) {
         clearType = "Fail";
         ssr = 0;
     } else if (accPct < 83 || gameState.hasPausedDuringPlay) {
+        // Legacy: Check if we need to set Invalid
         clearType = "Invalid";
     }
 
@@ -2064,12 +2243,12 @@ function showResults() {
     if (document.getElementById('res-clear-type')) {
         const c = CLEAR_COLORS[clearType] || "#fff";
         document.getElementById('res-clear-type').style.color = c;
-        document.getElementById('res-clear-type').style.textShadow = `0 0 10px ${c}`;
+        document.getElementById('res-clear-type').style.textShadow = `0 0 10px ${c} `;
     }
 
     // Set Initial Judge Label (Live played diff)
     const judgeDiff = userConfig.judgeDifficulty || 4;
-    setText('res-judge-label', `J${judgeDiff}`);
+    setText('res-judge-label', `J${judgeDiff} `);
     document.getElementById('res-judge-label').style.display = 'inline';
 
     // Store hits for Re-Judge Toggle
@@ -2093,16 +2272,17 @@ function showResults() {
     if (gradeEl) {
         gradeEl.innerText = grade;
         gradeEl.style.color = getGradeColor(grade);
-        gradeEl.style.textShadow = `0 0 30px ${getGradeColor(grade)}`;
+        gradeEl.style.textShadow = `0 0 30px ${getGradeColor(grade)} `;
     }
     setText('res-acc', accPct >= 99.70 ? accPct.toFixed(4) + "%" : accPct.toFixed(2) + "%");
     setText('res-score', Math.round(gameState.score).toLocaleString());
 
-    // Max DP is total notes * 2 (since max DP per note is 2)
+    // Max DP is 2 * Total (Cumulative)
     const maxDP = total * 2;
     const resDpEl = document.getElementById('res-dp');
     if (resDpEl) {
-        resDpEl.innerHTML = `${gameState.accumulatedAccuracyPoints.toFixed(2)} <span style="font-size:0.75em; color:#888;">/ ${maxDP.toFixed(2)}</span>`;
+        // dpPoints calculated above.
+        resDpEl.innerHTML = `${dpPoints.toFixed(2)} <span style="font-size:0.75em; color:#888;">/ ${maxDP.toFixed(2)}</span>`;
     }
 
     const ssrEl = document.getElementById('res-ssr');
@@ -2110,13 +2290,13 @@ function showResults() {
         ssrEl.innerText = "SSR: " + ssr.toFixed(2);
         const c = getDifficultyColor(ssr);
         ssrEl.style.color = c;
-        ssrEl.style.textShadow = `0 0 10px ${c}`;
+        ssrEl.style.textShadow = `0 0 10px ${c} `;
     }
     setText('res-pauses', gameState.pauseCount);
 
     const comboPct = (gameState.maxCombo / total * 100).toFixed(2);
     setText('res-combo', gameState.maxCombo);
-    setText('res-combo-pct', `(${comboPct}%)`);
+    setText('res-combo-pct', `(${comboPct} %)`);
     setText('res-mean', stats.mean + "ms");
     setText('res-sd', stats.sd + "ms");
     setText('res-max', stats.max + "ms");
@@ -2126,8 +2306,8 @@ function showResults() {
     const updateJudgeRes = (type) => {
         const count = gameState.judgments[type];
         const pct = (count / total * 100).toFixed(2);
-        setText(`res-count-${type}`, count);
-        setText(`res-pct-${type}`, `${pct}%`);
+        setText(`res - count - ${type} `, count);
+        setText(`res - pct - ${type} `, `${pct}% `);
     };
     ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss', 'ok', 'ng'].forEach(updateJudgeRes);
 
@@ -2187,13 +2367,13 @@ function setupCanvas() {
     if (userConfig.downScroll) {
         // Downscroll: Base is 0.9. Move 65 (margin) + 20 (offset).
         // Request: "move the downscroll receptors' absolute positions up by 20px"
-        // Previous (Baseline): `height*0.9 - 65`.
+        // Previous (Baseline): `height * 0.9 - 65`.
         // Up by 20px: `- 65 - 20`.
         gameConfig.receptorY = (canvas.height * 0.9) - 65 - 20;
     } else {
         // Upscroll: Base is 0.1.
         // Request: "move the upscroll receptors' absolute positions up by 40px"
-        // Previous (Baseline): `height*0.1 + 65`.
+        // Previous (Baseline): `height * 0.1 + 65`.
         // Up by 40px: `+ 65 - 40`.
         gameConfig.receptorY = (canvas.height * 0.1) + 65 - 40;
     }
@@ -2467,7 +2647,7 @@ function drawNote(note, y, rotation) {
     }
     ctx.restore();
 }
-function drawErrorBar() { const eb = document.getElementById('errorBarCanvas'); if (!eb) return; const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height); const scale = 150 / 180; const now = Date.now(); gameState.recentHits = gameState.recentHits.filter(h => now - h.time < 2000); gameState.recentHits.forEach(h => { const x = 150 - (h.offset * scale); const age = now - h.time; const alpha = 1 - (age / 2000); let color = "255, 255, 255"; const abs = Math.abs(h.offset); if (abs <= J_MARVELOUS) color = "163, 247, 255"; else if (abs <= J_PERFECT) color = "255, 230, 0"; else if (abs <= J_GREAT) color = "68, 255, 75"; else if (abs <= J_GOOD) color = "0, 153, 255"; else if (abs <= J_BAD) color = "170, 0, 255"; else color = "255, 51, 51"; eCtx.fillStyle = `rgba(${color}, ${alpha})`; eCtx.fillRect(x - 1, 0, 3, 20); }); const offsets = gameState.hitOffsets; if (offsets.length > 0) { const sum = offsets.reduce((a, b) => a + b, 0); const mean = sum / offsets.length; setText('hit-mean', `${mean.toFixed(2)}ms`); } }
+function drawErrorBar() { const eb = document.getElementById('errorBarCanvas'); if (!eb) return; const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height); const scale = 150 / 180; const now = Date.now(); gameState.recentHits = gameState.recentHits.filter(h => now - h.time < 2000); gameState.recentHits.forEach(h => { const x = 150 - (h.offset * scale); const age = now - h.time; const alpha = 1 - (age / 2000); let color = "255, 255, 255"; const abs = Math.abs(h.offset); if (abs <= J_MARVELOUS) color = "163, 247, 255"; else if (abs <= J_PERFECT) color = "255, 230, 0"; else if (abs <= J_GREAT) color = "68, 255, 75"; else if (abs <= J_GOOD) color = "0, 153, 255"; else if (abs <= J_BAD) color = "170, 0, 255"; else color = "255, 51, 51"; eCtx.fillStyle = `rgba(${color}, ${alpha})`; eCtx.fillRect(x - 1, 0, 3, 20); }); const offsets = gameState.hitOffsets; if (offsets.length > 0) { const sum = offsets.reduce((a, b) => a + b, 0); const mean = sum / offsets.length; setText('hit-mean', `${mean.toFixed(2)} ms`); } }
 function drawNPSGraph() {
     const c = document.getElementById('npsGraph');
     if (!c) return;
@@ -2857,7 +3037,7 @@ function gameLoop() {
         t = Math.max(0, t);
         const m = Math.floor(t / 60);
         const s = Math.floor(t % 60).toString().padStart(2, '0');
-        return `${m}:${s}`;
+        return `${m}:${s} `;
     };
     setText('time-elapsed', formatTime(currentTime / rate));
     setText('time-total', formatTime(totalTime / rate));
@@ -2887,7 +3067,7 @@ function startKeyBind(index) {
         if (typeof bindingIndex === 'number') {
             // Binding Columns (Use Key char usually)
             userConfig.keys[bindingIndex] = key.toLowerCase();
-            const b = document.getElementById(`key-btn-${bindingIndex}`);
+            const b = document.getElementById(`key - btn - ${bindingIndex} `);
             if (b) b.innerText = key.toUpperCase();
         } else {
             // Binding System Keys
@@ -2921,7 +3101,7 @@ function startKeyBind(index) {
         bindingIndex = -1;
         document.querySelectorAll('.key-bind-btn').forEach(b => b.classList.remove('binding'));
         document.removeEventListener('keydown', bindHandler);
-        saveSettings(); // Auto save
+        saveUserConfig(); // Auto save without redirect
     };
     document.addEventListener('keydown', bindHandler);
 }
@@ -2963,7 +3143,7 @@ function openSettings() {
             // Visual Feedback for Columns
             const colIndex = userConfig.keys.indexOf(e.key.toLowerCase());
             if (colIndex !== -1) {
-                const el = document.getElementById(`test-col-${colIndex}`);
+                const el = document.getElementById(`test - col - ${colIndex} `);
                 if (el) {
                     if (e.type === 'keydown') el.classList.add('active');
                     else el.classList.remove('active');
@@ -3029,21 +3209,32 @@ function updateSettingsPreview() {
             good: "#0099ff", bad: "#aa00ff", miss: "#ff3333"
         };
 
-        let html = '';
+        let html = `
+            <table class="det-stats-table">
+                <thead><tr style="color:#888; border-bottom:1px solid #444; font-size:0.8rem;">
+                    <th style="padding:5px; text-align:left;">Judge</th>
+                    <th style="padding:5px; text-align:right;">Window</th>
+                    <th style="padding:5px; text-align:right;">Life</th>
+                </tr></thead>
+                <tbody>
+        `;
+
         windows.forEach(w => {
             const ms = getTimingWindow(w, jDiff).toFixed(1);
             let lVal = lifeVals[w];
             let lColor = parseFloat(lVal) >= 0 ? "#44ff4b" : "#ff3333";
             if (parseFloat(lVal) > 0) lVal = "+" + lVal;
+            const jColor = colors[w];
 
             html += `
-                <div class="det-stat-item" style="border-left: 3px solid ${colors[w]}">
-                    <div class="det-stat-label" style="color:${colors[w]}">${w.toUpperCase()}</div>
-                    <div class="det-stat-row"><span>Window</span> <span>${ms}ms</span></div>
-                    <div class="det-stat-row"><span>Life</span> <span style="color:${lColor}">${lVal}%</span></div>
-                </div>
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <td style="padding:6px 5px; color:${jColor}; font-weight:bold; letter-spacing:1px; font-size:0.9rem;">${w.toUpperCase()}</td>
+                    <td style="padding:6px 5px; text-align:right; color:#ccc;">${ms}ms</td>
+                    <td style="padding:6px 5px; text-align:right; color:${lColor}; font-weight:bold;">${lVal}%</td>
+                </tr>
             `;
         });
+        html += '</tbody></table>';
         container.innerHTML = html;
     }
 }
@@ -3108,7 +3299,7 @@ function togglePause() {
 
             // Set Initial Judge Label (Live played diff)
             const judgeDiff = userConfig.judgeDifficulty || 4;
-            setText('res-judge-label', `J${judgeDiff}`);
+            setText('res-judge-label', `J${judgeDiff} `);
             document.getElementById('res-judge-label').style.display = 'inline';
 
             // Store hits for Re-Judge Toggle
@@ -3129,9 +3320,9 @@ function togglePause() {
         setText('pause-song-title', gameState.meta.title);
         setText('pause-song-artist', gameState.meta.artist);
 
-        const acc = (gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed * 2)) : 1) * 100;
+        const currentAcc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed)) : 0;
         setText('pause-score', Math.round(gameState.score));
-        setText('pause-acc', acc.toFixed(2) + "%");
+        setText('pause-acc', currentAcc.toFixed(2) + "%");
         setText('pause-combo', gameState.combo);
         setText('pause-count-val', gameState.pauseCount + 1);
 
@@ -3140,11 +3331,11 @@ function togglePause() {
         const judgesContainer = document.getElementById('pause-judges');
         if (judgesContainer) {
             judgesContainer.innerHTML = judges.map(j => `
-                <div class="p-mini-judge-item">
+                < div class="p-mini-judge-item" >
                     <span class="p-mini-judge-val judge-${j}">${gameState.judgments[j]}</span>
                     <span style="font-size:0.6rem; color:#666; text-transform:uppercase;">${j.substr(0, 3)}</span>
-                </div>
-            `).join('');
+                </div >
+                `).join('');
         }
 
         // Show Overlay (Already done above, removing duplicate)
@@ -3287,7 +3478,7 @@ window.onRateChange = (newRate) => {
                     if (el) {
                         el.innerText = val.toFixed(2);
                         el.style.color = getDifficultyColor(val);
-                        el.style.textShadow = `0 0 10px ${getDifficultyColor(val)}`;
+                        el.style.textShadow = `0 0 10px ${getDifficultyColor(val)} `;
                     }
                 };
 
@@ -3451,7 +3642,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     // TARGET TRACKER INIT
     gameState.targetTrackerPB = 0;
     if (modConfig.targetTracker && modConfig.targetTrackerMode === 'pb') {
-        const key = `webSM_lb_${meta.title}_${chartInfo.difficulty}`;
+        const key = `webSM_lb_${meta.title}_${chartInfo.difficulty} `;
         try {
             const lb = JSON.parse(localStorage.getItem(key)) || [];
             if (lb.length > 0 && lb[0].acc) {
@@ -3474,7 +3665,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     const trackerEl = document.getElementById('hud-tracker');
     if (modConfig.targetTracker) {
         if (trackerEl) trackerEl.style.display = 'flex';
-        if (targetEl) targetEl.innerText = `Target: ${gameState.targetTrackerTarget.toFixed(2)}%`;
+        if (targetEl) targetEl.innerText = `Target: ${gameState.targetTrackerTarget.toFixed(2)}% `;
         // Init Diff to 0
         const diffEl = document.getElementById('tracker-diff');
         if (diffEl) {
@@ -3542,7 +3733,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
             const container = document.getElementById('hud-difficulty-display');
             if (container) {
                 container.style.color = c;
-                container.style.textShadow = `0 0 10px ${c}`;
+                container.style.textShadow = `0 0 10px ${c} `;
             }
         }
     }
@@ -3721,7 +3912,7 @@ fileInput.addEventListener('change', async (e) => {
         for (let i = 0; i < groupKeys.length; i++) {
             const rootPath = groupKeys[i];
             const groupDefs = songGroups[rootPath];
-            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length})`);
+            setText('loading-text', `Importing Songs(${i + 1}/${groupKeys.length})`);
 
             let combinedMeta = null;
             let combinedCharts = [];
@@ -3734,7 +3925,7 @@ fileInput.addEventListener('change', async (e) => {
                 const isSSC = defFile.name.toLowerCase().endsWith('.ssc');
 
                 if (isSSC) {
-                    console.log(`[Upload] Parsing SSC: ${defFile.name}`);
+                    console.log(`[Upload] Parsing SSC: ${defFile.name} `);
                     parsed = parseSSC(text);
                 } else {
                     parsed = parseSM(text);
@@ -4294,28 +4485,51 @@ function recalculateStatsDetailed(detailedHits, judgeDiff) {
 
         if (h.offset === null || j === 'MISS') {
             internalJudgments.miss++;
-            accPoints += -8;
+            // Use calculateAccuracy fallback for miss? Or hardcode -275?
+            accPoints += -275; // or calculateAccuracy(1000)
             totalHitOrMiss++;
             return;
         }
 
         // Tap Re-Judge
-        const abs = Math.abs(h.offset);
-        if (abs <= wMarv) { internalJudgments.marvelous++; totalScore += sMarv; accPoints += 3; }
-        else if (abs <= wPerf) { internalJudgments.perfect++; totalScore += sPerf; accPoints += 2; }
-        else if (abs <= wGreat) { internalJudgments.great++; totalScore += sGreat; accPoints += 1; }
-        else if (abs <= wGood) { internalJudgments.good++; totalScore += sGood; accPoints += 0; }
-        else if (abs <= wBad) { internalJudgments.bad++; totalScore += 0; accPoints += -4; }
-        else {
-            // Hit but outside BAD window in new difficulty? Treat as Miss?
-            // "Miss window" handling.
-            internalJudgments.miss++; totalScore += 0; accPoints += -8;
+        // Use calculateAccuracy(offset) BUT we need to respect 'judgeDiff'.
+        // calculateAccuracy uses userConfig.judgeDifficulty.
+        // We must swap it temporarily.
+        const originalDiff = userConfig.judgeDifficulty;
+        userConfig.judgeDifficulty = judgeDiff;
+
+        try {
+            const pt = calculateAccuracy(h.offset);
+            accPoints += pt;
+
+            // Still need to bucket judgement counts for UI
+            // We can't use pt alone for buckets? 
+            // We can use the windows calculated above (wMarv etc) for counting.
+            const abs = Math.abs(h.offset);
+            if (abs <= wMarv) { internalJudgments.marvelous++; totalScore += sMarv; }
+            else if (abs <= wPerf) { internalJudgments.perfect++; totalScore += sPerf; }
+            else if (abs <= wGreat) { internalJudgments.great++; totalScore += sGreat; }
+            else if (abs <= wGood) { internalJudgments.good++; totalScore += sGood; }
+            else if (abs <= wBad) { internalJudgments.bad++; totalScore += 0; }
+            // Note: calculateAccuracy returns negative for BAD?
+            // Actually calculateAccuracy returns negative for > 180ms.
+            // Bad window is 180.
+            // If Bad, we add negative points?
+            // calculateAccuracy gives negative for Bad range?
+            // Let's check calculateAccuracy logic:
+            // "if abs <= 180 return -275 * ..." -> Negative slope.
+            // So yes, Bad is negative.
+
+        } finally {
+            userConfig.judgeDifficulty = originalDiff;
         }
         totalHitOrMiss++;
     });
 
     totalScore = Math.max(0, totalScore);
-    const acc = totalHitOrMiss > 0 ? (accPoints / (totalHitOrMiss * 2)) * 100 : 0;
+    // Acc is Average of Points (0-100)
+    // accPoints is Sum.
+    const acc = totalHitOrMiss > 0 ? (accPoints / totalHitOrMiss) : 0;
 
     // Recalc Grade
     // Need grade thresholds? Assuming standard getGrade(acc)
@@ -4341,10 +4555,16 @@ function saveScore(forceFail = false) {
     // We pass `gameState.detailedHits`.
     const j4Stats = recalculateStatsInternal(gameState.detailedHits, 4, baseNoteScore);
 
+    // DP Score for Saved J4
+    // Formula: (Acc% / 100) * (Total * 2)
+    const total = gameState.totalNotesInChart || 1;
+    const dpVal = (j4Stats.acc / 100) * (total * 2);
+
     const scoreObj = {
         score: Math.round(j4Stats.score), // Rounded
+        dpScore: dpVal.toFixed(2), // Added derived DP
         judgments: j4Stats.judgments,
-        acc: j4Stats.acc,
+        acc: j4Stats.acc.toFixed(4), // Ensure string format matches? Or number? Leaderboard expects string usually
         grade: forceFail ? 'F' : j4Stats.grade,
         maxCombo: gameState.maxCombo,
         fcType: getFCType(j4Stats.judgments, forceFail ? 'F' : j4Stats.grade), // Need helper or inline
@@ -4391,24 +4611,35 @@ function recalculateStatsInternal(hits, judgeDiff, baseNoteScore) {
     const sGood = (baseNoteScore - 10) * 0.2;
 
     hits.forEach(h => {
-        const type = h.judge.toUpperCase(); // Derived from original judge, but we only trust type for non-taps
-        if (type === 'MINE') { j.mine++; score -= 500; accPts -= 7; count++; return; }
+        const type = h.judge.toUpperCase();
+        if (type === 'MINE') { j.mine++; score -= 500; accPts += -230; count++; return; } // Scaled -7 -> -230
         if (type === 'OK') { j.ok++; return; }
-        if (type === 'NG') { j.ng++; accPts -= 4.5; count++; return; }
-        if (h.offset === null || type === 'MISS') { j.miss++; accPts -= 8; count++; return; }
+        if (type === 'NG') { j.ng++; accPts += -150; count++; return; } // Scaled -4.5? -150 approx (half miss)
+        if (h.offset === null || type === 'MISS') { j.miss++; accPts += -275; count++; return; }
 
         // Tap
+        const originalDiff = userConfig.judgeDifficulty;
+        userConfig.judgeDifficulty = judgeDiff;
+        try {
+            const pt = calculateAccuracy(h.offset);
+            accPts += pt;
+        } finally {
+            userConfig.judgeDifficulty = originalDiff;
+        }
+
+        // Buckets
         const abs = Math.abs(h.offset);
-        if (abs <= wMarv) { j.marvelous++; score += sMarv; accPts += 3; }
-        else if (abs <= wPerf) { j.perfect++; score += sPerf; accPts += 2; }
-        else if (abs <= wGreat) { j.great++; score += sGreat; accPts += 1; }
-        else if (abs <= wGood) { j.good++; score += sGood; accPts += 0; }
-        else if (abs <= wBad) { j.bad++; score += 0; accPts -= 4; }
-        else { j.miss++; accPts -= 8; }
+        if (abs <= wMarv) { j.marvelous++; score += sMarv; }
+        else if (abs <= wPerf) { j.perfect++; score += sPerf; }
+        else if (abs <= wGreat) { j.great++; score += sGreat; }
+        else if (abs <= wGood) { j.good++; score += sGood; }
+        else if (abs <= wBad) { j.bad++; score += 0; }
+        else { j.miss++; } // Missed window but processed as hit?
+
         count++;
     });
 
-    const acc = count > 0 ? (accPts / (count * 2)) * 100 : 0;
+    const acc = count > 0 ? (accPts / count) : 0;
 
     // Recalc Grade
     let grade = 'F';
@@ -4437,6 +4668,16 @@ function recalculateResults(judgeDiff) {
     // Grade Color
     const gEl = document.getElementById('res-grade');
     if (gEl) gEl.style.color = getGradeColor(stats.grade);
+
+    // Update DP Score
+    const total = gameState.totalNotesInChart || 1;
+    // Formula: (Acc% / 100) * (Total * 2)
+    const dpPoints = (stats.acc / 100) * (total * 2);
+    const maxDP = total * 2;
+    const resDpEl = document.getElementById('res-dp');
+    if (resDpEl) {
+        resDpEl.innerHTML = `${dpPoints.toFixed(2)} <span style="font-size:0.75em; color:#888;">/ ${maxDP.toFixed(2)}</span>`;
+    }
 
     // Clear Type - Keep original Fail status?
     // If we originally failed, we stay failed.

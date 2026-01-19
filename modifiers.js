@@ -168,6 +168,10 @@ function changeSpeedVal(delta) {
 window.changeSpeedVal = changeSpeedVal;
 
 function changeRateVal(delta) {
+    // Restriction: Only allow rate change in Song Select (setup-panel)
+    const setupPanel = document.getElementById('setup-panel');
+    if (!setupPanel || getComputedStyle(setupPanel).display === 'none') return;
+
     const step = 0.05;
     let newRate = modConfig.rate + (delta * step);
     newRate = Math.max(0.7, Math.min(3.0, newRate)); // Clamped per user request
