@@ -2571,12 +2571,20 @@ function showResults() {
 
     // Handle specific fail logic if requested (usually Fails are just Fails).
 
+    // Fail Logic Update
+    if (gameState.failed) {
+        // If failed, Acc is calculated over the ENTIRE chart.
+        const totalMaxScore = (gameState.totalNotesInChart || 1) * 100;
+        baseAcc = (gameState.accumulatedAccuracyPoints / totalMaxScore) * 100;
+    }
+
     const accPct = baseAcc;
     const total = gameState.totalNotesInChart;
 
     // DP Points (per user request: Max is 2 * TotalNotes)
-    // Formula: (Acc% / 100) * (2 * TotalNotes)
-    const dpPoints = (accPct / 100) * (total * 2);
+    // Correct Formula for Earned DP: (AccumulatedPoints / 100) * 2
+    // AccumulatedPoints is roughly Sum(0-100).
+    const dpPoints = (gameState.accumulatedAccuracyPoints / 100) * 2;
 
     setScreen('results-screen');
     document.getElementById('gameCanvas').style.display = 'none';
