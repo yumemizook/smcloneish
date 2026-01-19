@@ -131,6 +131,8 @@ function parseSM(text) {
     meta.cdtitle = getTag('CDTITLE');
     meta.subtitle = getTag('SUBTITLE') || "";
     meta.offset = parseFloat(getTag('OFFSET')) || 0;
+    meta.sampleStart = parseFloat(getTag('SAMPLESTART')) || 0;
+    meta.sampleLength = parseFloat(getTag('SAMPLELENGTH')) || 15; // Default 15s
 
     const bpmMatch = text.match(/#BPMS:([\s\S]*?);/i);
     meta.bpms = bpmMatch ? bpmMatch[1].trim().split(',').map(b => {
@@ -149,7 +151,8 @@ function parseSM(text) {
                 charts.push({
                     difficulty: parts[2].trim(),
                     meter: parts[3].trim(),
-                    notes: parseNoteData(parts[5].replace(';', '').trim(), meta.bpms, meta.offset)
+                    notes: parseNoteData(parts[5].replace(';', '').trim(), meta.bpms, meta.offset),
+                    bpms: meta.bpms
                 });
             }
         }
@@ -191,6 +194,8 @@ function parseSSC(text) {
     meta.cdtitle = getTag(text, 'CDTITLE');
     meta.subtitle = getTag(text, 'SUBTITLE') || "";
     meta.offset = parseFloat(getTag(text, 'OFFSET')) || 0;
+    meta.sampleStart = parseFloat(getTag(text, 'SAMPLESTART')) || 0;
+    meta.sampleLength = parseFloat(getTag(text, 'SAMPLELENGTH')) || 15;
 
     const bpmMatch = text.match(/#BPMS:([\s\S]*?);/i);
     meta.bpms = bpmMatch ? bpmMatch[1].trim().split(',').map(b => {
@@ -215,11 +220,22 @@ function parseSSC(text) {
             const meter = getTag(block, 'METER') || "1";
             const notesRaw = getTag(block, 'NOTES');
 
+            // Check for Local Timing (BPMS)
+            let chartBpms = meta.bpms;
+            const localBpmMatch = block.match(/#BPMS:([\s\S]*?);/i);
+            if (localBpmMatch) {
+                chartBpms = localBpmMatch[1].trim().split(',').map(b => {
+                    const p = b.split('=');
+                    return { beat: parseFloat(p[0]), value: parseFloat(p[1]) };
+                });
+            }
+
             if (notesRaw) {
                 charts.push({
                     difficulty: difficulty,
                     meter: meter,
-                    notes: parseNoteData(notesRaw.trim(), meta.bpms, meta.offset)
+                    notes: parseNoteData(notesRaw.trim(), chartBpms, meta.offset),
+                    bpms: chartBpms
                 });
                 console.log(`[SSC] Parsed chart: ${difficulty} (${meter})`);
             } else {
@@ -237,16 +253,45 @@ function parseNoteData(data, bpms, songOffset) {
     let currentBeat = 0;
     let activeHolds = [null, null, null, null];
 
+    // Pre-sort BPMs just in case
+    const sortedBpms = bpms.sort((a, b) => a.beat - b.beat);
+
+    // Helper: Calculate Time from Beats dynamically
+    function getAccumulatedTime(targetBeat, bpms) {
+        let time = 0;
+        let pBeat = 0;
+
+        for (let i = 0; i < bpms.length; i++) {
+            const b = bpms[i];
+            const nextB = bpms[i + 1];
+            const segmentEndBeat = nextB ? nextB.beat : Infinity;
+
+            // If target is in this segment
+            if (targetBeat < segmentEndBeat) {
+                const duration = targetBeat - Math.max(pBeat, b.beat);
+                if (duration > 0) {
+                    time += duration * (60 / b.value);
+                }
+                break;
+            } else {
+                // Add full segment
+                const duration = segmentEndBeat - Math.max(pBeat, b.beat);
+                if (duration > 0) {
+                    time += duration * (60 / b.value);
+                }
+            }
+        }
+        return time;
+    }
+
     measures.forEach((measure) => {
         const lines = measure.trim().split(/\s+/);
         const rows = lines.length;
         const beatPerLine = 4 / rows;
-        const bpm = bpms[0].value;
-        const secondsPerBeat = 60 / bpm;
 
         lines.forEach((line, rowIndex) => {
             const exactBeat = currentBeat + (rowIndex * beatPerLine);
-            const time = (exactBeat * secondsPerBeat) - songOffset;
+            const time = getAccumulatedTime(exactBeat, sortedBpms) - songOffset;
 
             for (let col = 0; col < 4; col++) {
                 const char = line[col];
@@ -530,9 +575,20 @@ function closeHelp() {
 }
 window.closeHelp = closeHelp;
 
+const uiCache = {};
 function setText(id, text) {
-    const el = document.getElementById(id);
-    if (el) el.innerText = text;
+    let el = uiCache[id];
+    if (!el) {
+        el = document.getElementById(id);
+        if (el) uiCache[id] = el;
+    }
+    if (el) {
+        // Only update if changed to avoid reflows
+        if (el._lastText !== text) {
+            el.innerText = text;
+            el._lastText = text;
+        }
+    }
 }
 
 /* =========================================
@@ -914,10 +970,210 @@ function selectSong(index) {
         setText(`calc-${k}`, "0.0");
     });
 
-    // Auto-select first difficulty
+    // --- Audio Preview ---
+    if (previewAudio) {
+        previewAudio.pause();
+        previewAudio = null;
+    }
+    // Also stop chart preview loop if running
+    if (previewLoopId) cancelAnimationFrame(previewLoopId);
+    updatePlayBtn(false);
+
+    if (song.audioBlob) {
+        const url = URL.createObjectURL(song.audioBlob);
+        previewAudio = new Audio(url);
+        const baseVol = 0.6;
+        previewAudio.volume = baseVol;
+
+        const start = song.meta.sampleStart || 0;
+        const length = song.meta.sampleLength || 15;
+
+        previewState.isLoopingSample = true;
+        previewState.sampleStart = start;
+        previewState.sampleLength = length;
+
+        previewState.isLoopingSample = true;
+        previewState.sampleStart = start;
+        previewState.sampleLength = length;
+
+        // Defer seek until metadata is loaded to ensure it works
+        const playPreview = () => {
+            if (previewAudio) {
+                previewAudio.pause();
+                previewAudio.currentTime = start; // Set to 'start' not 0
+                // Apply Settings
+                updatePreviewAudioSettings();
+                previewAudio.play().catch(e => console.warn("Preview autoplay blocked", e));
+            }
+        };
+
+        previewAudio.loop = false; // We handle looping manually for fade
+
+        updatePreviewAudioSettings();
+
+        // Wait for metadata to load before playing
+        previewAudio.addEventListener('loadedmetadata', () => {
+            playPreview();
+        }, { once: true });
+
+        if (previewAudio.readyState >= 1) {
+            playPreview();
+        }
+
+        // Loop & Fade Logic
+        previewAudio.addEventListener('timeupdate', () => {
+            if (!previewAudio) return;
+            if (!previewState.isLoopingSample) return; // Allow manual seeking if flag is off
+
+            const end = start + length;
+            const now = previewAudio.currentTime;
+
+            // Loop check
+            if (now >= end) {
+                previewAudio.currentTime = start;
+                previewAudio.volume = baseVol;
+                return;
+            }
+
+            // Fade out last 1.5 seconds
+            const fadeDur = 1.5;
+            const remaining = end - now;
+            if (remaining <= fadeDur && remaining > 0) {
+                previewAudio.volume = baseVol * (remaining / fadeDur);
+            } else {
+                // Ensure volume is restored if we jumped back or are in middle
+                if (Math.abs(previewAudio.volume - baseVol) > 0.01) previewAudio.volume = baseVol;
+            }
+        });
+
+    }
+
+    // Auto-select first difficulty (After audio setup)
     if (song.charts && song.charts.length > 0) {
         selectDifficulty(0);
     }
+}
+
+function updateBannerStats(chart) {
+    if (!chart) return;
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+
+    // --- BPM Logic ---
+    let minBPM = 99999, maxBPM = 0;
+    let mainBPM = 0;
+    let displayBPM = "";
+
+    const fmt = (n) => Math.round(n * rate);
+
+    if (chart.bpms && chart.bpms.length > 0) {
+        // Calculate Min/Max and Weighted Mode
+        const durMap = {};
+
+        // Use last note beat to cap the last BPM segment
+        let endBeat = 0;
+        if (chart.notes && chart.notes.length > 0) {
+            endBeat = chart.notes[chart.notes.length - 1].beat;
+        } else {
+            endBeat = 1000; // Fallback
+        }
+
+        // Sort BPMs by beat (parser produces {beat, value})
+        const sorted = [...chart.bpms].sort((a, b) => a.beat - b.beat);
+
+        sorted.forEach((b, i) => {
+            const val = b.value;
+            if (val < minBPM) minBPM = val;
+            if (val > maxBPM) maxBPM = val;
+
+            // Duration in beats
+            let startBeat = b.beat;
+            let nextBeat = (i < sorted.length - 1) ? sorted[i + 1].beat : endBeat;
+
+            // If the start beat of the last BPM is AFTER the last note, duration is 0 (or handled gracefully)
+            // But usually last BPM is at beat 0 or before end.
+            if (startBeat > endBeat) nextBeat = startBeat; // Minimal duration
+
+            let beatDur = Math.max(0, nextBeat - startBeat);
+
+            // Convert to Time Duration for weighting: beats * (60 / bpm)
+            let timeDur = beatDur * (60 / (val || 120)); // avoid div 0
+
+            durMap[val] = (durMap[val] || 0) + timeDur;
+        });
+
+        // Find Main (Mode)
+        let maxDur = -1;
+        for (const [bpmStr, dur] of Object.entries(durMap)) {
+            if (dur > maxDur) {
+                maxDur = dur;
+                mainBPM = parseFloat(bpmStr);
+            }
+        }
+
+        // Format
+        if (minBPM > 90000) minBPM = 0; // Safety
+
+        if (Math.abs(minBPM - maxBPM) < 1.0) {
+            displayBPM = `${fmt(maxBPM)}`;
+        } else {
+            // Format: "Min-Max (Main)"
+            displayBPM = `${fmt(minBPM)}-${fmt(maxBPM)} (${fmt(mainBPM)})`;
+        }
+    } else {
+        // Fallback to meta
+        const metaBPM = parseFloat(songLibrary[selectedSongIndex].meta.bpm) || 150;
+        displayBPM = `${fmt(metaBPM)}`;
+    }
+
+    // --- Length Logic ---
+    let length = 0;
+    // Uses time directly from notes if available (which parseNoteData provides)
+    if (chart.notes && chart.notes.length > 0) {
+        length = chart.notes[chart.notes.length - 1].time;
+    }
+
+    // Apply Rate
+    const realLength = length / rate;
+
+    // Format mm:ss
+    const m = Math.floor(realLength / 60);
+    const s = Math.floor(realLength % 60);
+    const timeStr = `${m}:${s.toString().padStart(2, '0')}`;
+
+    // Color Coding
+    let lenColor = "#fff"; // Default
+    if (realLength < 120) lenColor = "#88ccff"; // Short < 2m (Blueish)
+    else if (realLength < 240) lenColor = "#88ff88"; // Standard < 4m (Green)
+    else lenColor = "#ff88cc"; // Long >= 4m (Red/Purple)
+
+    // --- Update DOM ---
+    const bannerContainer = document.getElementById('ss-banner').parentNode;
+    if (getComputedStyle(bannerContainer).position === 'static') {
+        bannerContainer.style.position = 'relative';
+    }
+
+    let overlay = document.getElementById('ss-info-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'ss-info-overlay';
+        overlay.style.position = 'absolute';
+        overlay.style.top = '5px';
+        overlay.style.left = '5px';
+        overlay.style.background = 'rgba(0,0,0,0.6)';
+        overlay.style.padding = '4px 8px';
+        overlay.style.borderRadius = '4px';
+        overlay.style.color = '#fff';
+        overlay.style.fontSize = '0.9rem';
+        overlay.style.pointerEvents = 'none';
+        overlay.style.display = 'flex';
+        overlay.style.flexDirection = 'column';
+        bannerContainer.appendChild(overlay);
+    }
+
+    overlay.innerHTML = `
+        <div style="font-weight:bold; font-size:1.1em;">${displayBPM} <span style="font-size:0.7em; color:#ccc">BPM</span></div>
+        <div style="color:${lenColor}; font-weight:bold;">${timeStr}</div>
+    `;
 }
 
 function selectDifficulty(chartIndex) {
@@ -929,6 +1185,8 @@ function selectDifficulty(chartIndex) {
     });
 
     const chart = songLibrary[selectedSongIndex].charts[chartIndex];
+    if (chart) updateBannerStats(chart); // Update Banner Stats
+
     if (chart.notes) {
         const calc = calculateDetailedDifficulty(chart.notes);
 
@@ -1130,49 +1388,91 @@ function selectDifficulty(chartIndex) {
     const btn = document.getElementById('start-btn');
     btn.disabled = false;
     btn.innerText = "START GAME";
+
+    if (typeof currentSongTab !== 'undefined' && currentSongTab === 'preview') {
+        startChartPreview();
+    }
 }
 
 function calculateDetailedDifficulty(notes) {
     if (!notes || notes.length === 0) return { overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0, nps: 0, peak: 0 };
 
     // Rate Mod: Scale logic by rate
-    // We'll use the global modConfig.rate if available
     let rate = 1.0;
     if (typeof modConfig !== 'undefined' && modConfig.rate) rate = modConfig.rate;
 
-    // Filter out mines for all stats
-    // We strictly only want 'tappable' notes: Tap, Hold Head, Roll Head.
-    // Mines are excluded. Fakes/Lifts if present would also be excluded by this whitelist.
-    // Hold/Roll Bodies are not separate note objects in this parser, so they are naturally excluded (only heads exist).
     const validNotes = notes.filter(n => n.type === 'tap' || n.type === 'hold' || n.type === 'roll');
     if (validNotes.length === 0) return { overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0, nps: 0, peak: 0 };
 
     const rows = [];
-    let currentRow = { time: validNotes[0].time, notes: [] };
+    let currentRow = { time: validNotes[0].time, beat: validNotes[0].beat, notes: [] };
     for (let note of validNotes) {
         if (Math.abs(note.time - currentRow.time) < 0.002) { currentRow.notes.push(note); }
-        else { rows.push(currentRow); currentRow = { time: note.time, notes: [note] }; }
+        else { rows.push(currentRow); currentRow = { time: note.time, beat: note.beat, notes: [note] }; }
     }
     rows.push(currentRow);
     if (rows.length < 2) return { nps: 0, peak: 0, overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0 };
 
     let maxNPS = 0;
     const streamStrains = [], jsStrains = [], hsStrains = [], cjStrains = [], techStrains = [];
-    const windowPenalties = [];
+    // Max Strains for Stamina Calc
+    const maxStrains = [];
+
     const windowSize = 1.0; let windowStart = rows[0].time; let windowIndex = 0;
+
+    // SCALING HELPERS for Snap Complexity
+    // 0 = Neutral (4th, 8th), 1 = Binary (16th, 32nd), 2 = Ternary (12th, 24th)
+    const getSnapType = (beat) => {
+        const b = beat % 1;
+        const isSnap = (d) => Math.abs(b * d - Math.round(b * d)) < 0.01;
+        if (isSnap(2)) return 0; // 4th (Red), 8th (Blue) -> Common/Neutral
+        if (isSnap(4)) return 1; // 16th (Yellow) -> Binary
+        if (isSnap(3)) return 2; // 12th (Purple) -> Ternary
+        if (isSnap(8)) return 1; // 32nd (Orange) -> Binary
+        if (isSnap(6)) return 2; // 24th (Pink) -> Ternary
+        if (isSnap(12)) return 2; // 48th (Cyan) -> Ternary
+        return 1; // Everything else (64th etc) treated as Binary variant for now
+    };
+
+    const getSnapWeight = (beat) => {
+        const b = beat % 1;
+        const isSnap = (d) => Math.abs(b * d - Math.round(b * d)) < 0.01;
+
+        if (isSnap(4)) return 1.0; // 4th, 8th, 16th (Common)
+        if (isSnap(3)) return 1.1; // 12th
+        if (isSnap(6)) return 1.2; // 24th
+        if (isSnap(8)) return 1.3; // 32nd
+        if (isSnap(12)) return 1.4; // 48th
+        if (isSnap(16)) return 1.5; // 64th
+        return 1.2; // Uncommon
+    };
 
     while (windowIndex < rows.length) {
         let noteCount = 0, chordCount = 0, handCount = 0, jackCount = 0;
         const colCounts = [0, 0, 0, 0];
         const buckets = new Set();
+
+        let complexitySum = 0;
+        let hasBinary = false;
+        let hasTernary = false;
+
         let i = windowIndex;
         while (i < rows.length && rows[i].time < windowStart + windowSize) {
-            const rowNotes = rows[i].notes;
+            const row = rows[i];
+            const rowNotes = row.notes;
             noteCount += rowNotes.length;
             rowNotes.forEach(n => {
                 if (n.col >= 0 && n.col < 4) colCounts[n.col]++;
                 buckets.add(Math.floor(n.time * 100)); // 10ms buckets
             });
+
+            // Complexity Acummulation
+            complexitySum += getSnapWeight(row.beat || 0);
+
+            // Mixed Snap Detection
+            const type = getSnapType(row.beat || 0);
+            if (type === 1) hasBinary = true;
+            if (type === 2) hasTernary = true;
 
             if (rowNotes.length >= 2) chordCount++;
             if (rowNotes.length >= 3) handCount++;
@@ -1195,7 +1495,7 @@ function calculateDetailedDifficulty(notes) {
         let concentration = 0;
 
         if (nps > 15) {
-            // Vibro: Penalty for high concentration in top 2 columns (Trills)
+            // Vibro
             const sortedCounts = [...colCounts].sort((a, b) => b - a);
             const top2 = sortedCounts[0] + sortedCounts[1];
             concentration = noteCount > 0 ? top2 / noteCount : 0;
@@ -1203,27 +1503,19 @@ function calculateDetailedDifficulty(notes) {
                 vibroFactor = Math.max(0.6, 1.0 - (concentration - 0.8) * 2.0);
             }
 
-            // Quadspam: Quantized Density Check
-            // Count effective rows using 10ms buckets
+            // Quadspam
             const effectiveRows = buckets.size || 1;
             quantizedDensity = noteCount / effectiveRows;
-
             if (quantizedDensity > 2.5) {
-                // Punishment for Hands (3.0) -> 0.5x, Quads (4.0) -> 0.4x
                 quadFactor = Math.max(0.4, 1.0 - (quantizedDensity - 2.5) * 1.0);
             }
 
-            // Roll/Speed Cap: If NPS > 30 and Density is Low (Single note stream/roll), cap it.
+            // Roll/Speed Cap
             if (nps > 30 && quantizedDensity < 1.6) {
                 rollFactor = 30.0 / nps;
             }
-
-            if (nps > 40) {
-                console.log(`[DiffCalc] NPS: ${nps.toFixed(1)} | Den: ${quantizedDensity.toFixed(2)} | Conc: ${concentration.toFixed(2)} | Pen: ${Math.min(vibroFactor, quadFactor, rollFactor).toFixed(2)}`);
-            }
         }
 
-        // Apply penalty directly to this window's strains
         const penalty = Math.min(vibroFactor, quadFactor, rollFactor);
         const penalizedNPS = nps * penalty;
 
@@ -1231,17 +1523,27 @@ function calculateDetailedDifficulty(notes) {
         const jackFrequency = rowCount > 0 ? jackCount / rowCount : 0;
         const chordFrequency = rowCount > 0 ? chordCount / rowCount : 0;
 
+        // Snap Complexity Factor (Average of row weights)
+        const avgComplexity = rowCount > 0 ? complexitySum / rowCount : 1.0;
+
+        // Mixed Snap Bonus
+        // If window contains both 16th-family and 12th-family notes, boost Tech
+        const mixedBonus = (hasBinary && hasTernary) ? 1.15 : 1.0;
+
         let sStr = penalizedNPS * rate; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
         let sJs = penalizedNPS * rate; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
         if (jumpRatio < 0.2) sJs *= 0.2; else sJs *= (0.8 + jumpRatio * 0.4); jsStrains.push(sJs);
         let sHs = 0; if (handCount > 0) { sHs = (penalizedNPS * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
 
-        // Reworked CJ/Tech: NPS * Rate * Frequency
         let sCj = penalizedNPS * rate * chordFrequency * jackFrequency;
         cjStrains.push(sCj);
 
-        let sTech = penalizedNPS * rate * (0.4 + jackFrequency);
+        // Tech with Snap Complexity & Mixed Bonus
+        let sTech = penalizedNPS * rate * (0.4 + jackFrequency) * avgComplexity * mixedBonus;
         techStrains.push(sTech);
+
+        // Max Strain for Stamina
+        maxStrains.push(Math.max(sStr, sJs, sHs, sCj, sTech));
 
         windowStart += 0.5;
         while (windowIndex < rows.length && rows[windowIndex].time < windowStart) windowIndex++;
@@ -1259,12 +1561,70 @@ function calculateDetailedDifficulty(notes) {
 
     const duration = (rows[rows.length - 1].time - rows[0].time) / rate;
 
-    const denseThreshold = maxNPS * rate * 0.5;
-    const denseStrains = streamStrains.filter(s => s > denseThreshold);
-    const avgDense = denseStrains.length > 0 ? denseStrains.reduce((a, b) => a + b, 0) / denseStrains.length : 0;
-    let sStamina = avgDense * (1 + Math.log10(Math.max(1, duration / 60)));
+    // New Stamina Logic
+    // 1. Find Peak Intensity
+    let staminaPeak = 0;
+    if (maxStrains.length > 0) {
+        // Use 95th percentile or something robust? Or just max?
+        // Let's use aggregate of top few to ignore spikes.
+        // Actually, aggregate(maxStrains) is a decent "Peak" proxy.
+        staminaPeak = aggregate([...maxStrains]);
+    }
 
-    const scale = (val) => { return 45 * (1 - Math.exp(-Math.pow(val / 25.5, 2.5))); };
+    // 2. Filter Active Windows (e.g. > 50% of peak)
+    // Using a lower threshold helps capture the "body" of the song.
+    const activeStrains = maxStrains.filter(s => s > staminaPeak * 0.5);
+
+    // 3. Average Density of Active Section
+    const avgDense = activeStrains.length > 0 ? activeStrains.reduce((a, b) => a + b, 0) / activeStrains.length : 0;
+
+    // 4. Duration of Active Section (Each window step is 0.5s)
+    const durationDense = activeStrains.length * 0.5;
+
+    // 5. Stamina Calculation
+    // Base tied to avgDense (so it's "tied to highest skillsets")
+    // Logarithmic bonus for duration. Start bonus at ~30s?
+    // If duration < 30s, multiplier ~1.0? 
+    // Formula: avgDense * (1 + 0.4 * log10(max(1, duration / 30)))
+    // If 30s: log(1) = 0 -> Multiplier 1.0. Stamina = avgDense.
+    // If 300s: log(10) = 1 -> Multiplier 1.4.
+    let sStamina = avgDense * (1 + 0.4 * Math.log10(Math.max(1, durationDense / 30)));
+
+    const scale = (val) => {
+        // 1. Calculate original value (Standard Saturation)
+        const original = 45 * (1 - Math.exp(-Math.pow(val / 25.5, 2.5)));
+
+        // 2. Define Cutoff for Tail Logic (Rating 30 approx val 26.5)
+        const cutoff = 30;
+        if (original <= cutoff) return original;
+
+        // 3. Linear Projection for Tail (Differentiation)
+        // Instead of using the saturated 'original', we project 'val' linearly from the cutoff point.
+        // val 26.5 -> 30. Slope 0.8 ensures good separation.
+        const tailInput = 30 + (val - 26.5) * 0.8;
+
+        // 4. Soft Cap Convergence
+        // We want to converge to (40 * Rate).
+        const softCapVal = 40 * rate;
+
+        // If Rate > 2.0, we basically remove the cap / make it very soft?
+        // User asked "remove hard cap", but also "converge to 40 soft cap".
+        // The Soft Cap formula naturally scales.
+        // We'll use a saturated rise to the Soft Cap.
+
+        const limit = Math.max(1, softCapVal - cutoff);
+        const input = tailInput - cutoff;
+
+        // Asymptotic decay to limit: Limit * (1 - exp(-x / stretch))
+        // Stretch factor determines how slowly we converge (higher = more linear space).
+        // limit * 1.5 gives a very smooth approach.
+        const mapped = cutoff + limit * (1 - Math.exp(-input / (limit * 1.5)));
+
+        // 5. Hard Cap Check
+        const hardCap = 60 * rate;
+        if (rate > 2.0) return mapped;
+        return Math.min(mapped, hardCap);
+    };
     let result = {
         nps: (validNotes.length / duration), peak: maxNPS * rate, stream: scale(sStream), jumpstream: scale(sJS),
         handstream: scale(sHS), chordjack: scale(sCJ), technical: scale(sTech), stamina: scale(sStamina)
@@ -1276,11 +1636,6 @@ function calculateDetailedDifficulty(notes) {
     return result;
 }
 
-window.onRateChange = (newRate) => {
-    if (selectedChartIndex !== -1) {
-        selectDifficulty(selectedChartIndex);
-    }
-};
 
 let currentPreviewAudio = null;
 
@@ -1298,6 +1653,14 @@ function startAutoplay() {
 // ** START GAME **
 async function startGameFromMenu() {
     if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
+
+    // Stop Audio Preview
+    if (previewAudio) {
+        previewAudio.pause();
+        previewAudio = null;
+    }
+    if (previewLoopId) cancelAnimationFrame(previewLoopId);
+    updatePlayBtn(false);
 
     const song = songLibrary[selectedSongIndex];
     const chart = song.charts[selectedChartIndex];
@@ -1433,7 +1796,9 @@ function updateScoreDisplay() {
     setText('accuracy', displayAccPercent + "%");
     setText('score', displayScore);
 
-    const comboEl = document.getElementById('combo');
+    let comboEl = uiCache['combo'];
+    if (!comboEl) { comboEl = document.getElementById('combo'); uiCache['combo'] = comboEl; }
+
     if (comboEl) {
         if (gameState.combo > 0) {
             comboEl.style.visibility = 'visible';
@@ -1478,8 +1843,8 @@ function updateScoreDisplay() {
                 }
             }
 
-            comboEl.style.color = color;
-            comboEl.style.textShadow = shadow;
+            if (comboEl._lastColor !== color) { comboEl.style.color = color; comboEl._lastColor = color; }
+            if (comboEl._lastShadow !== shadow) { comboEl.style.textShadow = shadow; comboEl._lastShadow = shadow; }
 
         } else {
             comboEl.style.visibility = 'hidden';
@@ -1488,11 +1853,13 @@ function updateScoreDisplay() {
 
     setText('life-percent', gameState.life.toFixed(1) + "%");
 
-    const lifeEl = document.getElementById('life-bar-fill');
+    let lifeEl = uiCache['life-bar-fill'];
+    if (!lifeEl) { lifeEl = document.getElementById('life-bar-fill'); uiCache['life-bar-fill'] = lifeEl; }
     if (lifeEl) lifeEl.style.height = gameState.life + "%";
 
     const grade = getGrade(acc * 100);
-    const gEl = document.getElementById('live-grade');
+    let gEl = uiCache['live-grade'];
+    if (!gEl) { gEl = document.getElementById('live-grade'); uiCache['live-grade'] = gEl; }
     if (gEl) { gEl.innerText = grade; gEl.style.color = getGradeColor(grade); }
 }
 
@@ -1503,6 +1870,8 @@ function updateJudgmentTracker() {
     setText('count-good', gameState.judgments.good);
     setText('count-bad', gameState.judgments.bad);
     setText('count-miss', gameState.judgments.miss);
+    setText('count-ok', gameState.judgments.ok);
+    setText('count-ng', gameState.judgments.ng);
 }
 
 function triggerFail() {
@@ -1606,7 +1975,9 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         // NOTE: calculateAccuracy handles offset logic.
 
         let accScore = 0;
-        if (isMiss && note.type !== 'mine') {
+        if (gameState.isAutoplay) {
+            accScore = -75000;
+        } else if (isMiss && note.type !== 'mine') {
             // For Miss, we pass a large offset or handle explicitly?
             // calculateAccuracy returns -275 for > 180ms.
             // Miss window is 180ms usually. 
@@ -1639,7 +2010,15 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         scoreAdd = Math.max(0, scoreAdd); gameState.score += scoreAdd;
 
         if (!isMiss && (note.type === 'hold' || note.type === 'roll')) {
-            note.holdState = 'active'; note.processed = false; note.lastPressTime = audioCtx.currentTime - gameState.startTime;
+            note.holdState = 'active'; note.processed = false;
+
+            // Fix: Use correct Song Time for initialization
+            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+            if (gameState.mode === 'stretch' && gameState.audioEl) {
+                note.lastPressTime = gameState.audioEl.currentTime;
+            } else {
+                note.lastPressTime = (audioCtx.currentTime - gameState.startTime) * rate;
+            }
         } else if (!isMiss) { note.processed = true; }
 
         gameState.detailedHits.push({
@@ -1738,6 +2117,7 @@ function triggerHoldJudgement(note, isOK) {
     if (gameState.failed) return;
     if (isOK) {
         // Hold OK: Successful hold end.
+        gameState.judgments.ok++;
         // Per request: Do not increment combo or judgment count for tails.
         // We still award life for holding successfully.
         gameState.life = Math.min(100, gameState.life + 0.4);
@@ -2306,8 +2686,8 @@ function showResults() {
     const updateJudgeRes = (type) => {
         const count = gameState.judgments[type];
         const pct = (count / total * 100).toFixed(2);
-        setText(`res - count - ${type} `, count);
-        setText(`res - pct - ${type} `, `${pct}% `);
+        setText(`res-count-${type}`, count);
+        setText(`res-pct-${type}`, `${pct}%`);
     };
     ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss', 'ok', 'ng'].forEach(updateJudgeRes);
 
@@ -2517,12 +2897,16 @@ function drawNote(note, y, rotation) {
         if (bodyLoaded) {
             ctx.save();
 
-            // Alpha Fading Logic (Grace Period)
+            // Alpha Fading Logic (Grace Period & Rolls)
             if (note.letGoTime) {
                 const timeStr = (audioCtx ? audioCtx.currentTime - gameState.startTime : 0) - note.letGoTime;
                 const ms = timeStr * 1000;
                 const graceAlpha = Math.max(0, 1 - (ms / 250));
                 ctx.globalAlpha *= graceAlpha;
+            }
+            // Roll Transparency
+            if (note.rollAlpha !== undefined) {
+                ctx.globalAlpha *= note.rollAlpha;
             }
 
             // Dim Missed Holds
@@ -2707,6 +3091,28 @@ function drawNPSGraph() {
 function gameLoop() {
     if (!gameState.isPlaying || gameState.isPaused) return;
 
+    // FPS / Latency Calculation
+    const now = performance.now();
+    const delta = now - gameState.lastFrameTime;
+    gameState.lastFrameTime = now;
+
+    // Throttle UI Update (every 200ms)
+    if (typeof gameState.fpsTimer === 'undefined') gameState.fpsTimer = 0;
+    gameState.fpsTimer += delta;
+
+    if (gameState.fpsTimer >= 200) {
+        const fps = delta > 0 ? 1000 / delta : 0;
+        const fpsEl = document.getElementById('hud-fps-counter');
+        if (fpsEl) {
+            fpsEl.innerHTML = `<span style="color:#fff">${Math.round(fps)}</span> FPS <span style="font-size:0.8em; color:#aaa">(${delta.toFixed(1)}ms)</span>`;
+            // Color Coding
+            if (fps < 30) fpsEl.style.color = '#ff3333';
+            else if (fps < 55) fpsEl.style.color = '#ffcc00';
+            else fpsEl.style.color = 'rgba(255, 255, 255, 0.5)';
+        }
+        gameState.fpsTimer = 0;
+    }
+
     let currentTime = 0;
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
 
@@ -2791,22 +3197,22 @@ function gameLoop() {
         // BETTER: Use 'currentBPM' tracked variable if exists.
         // If not, let's look for it in activeNotes? No.
         // Let's iterate bpms:
-        const bpms = gameState.chart.bpms;
-        // We need beat. currentBeat = ? (Undefined in this scope usually)
-        // Let's just leave it static or implement beat tracking?
-        // User asked for "BPM".
-        // Let's try to get it from `getCurrentBPM` if defined, else 150.
-        // Looking at codebase, `getNoteRowIndex` uses beat.
-        // Let's skip complex logic and just set it if we know it.
-        // If we don't know it, we might leave it.
-        // But let's try to find it.
-        // If we have `gameState.currentBeat`, use it.
-        // If not, calculate it? (Expensive every frame).
-        // Let's add a `currentBPM` to gameState during updateScrollSpeed or similar events?
-        // For now, let's just assume 150 or whatever was set.
-        // Update: We can update it in `gameLoop` roughly.
-        // const curBPM = ...
-        // setText('hud-val-bpm', curBPM);
+        // Update BPM Display
+        let currentBPM = 120;
+        if (typeof getCurrentBPM === 'function') {
+            currentBPM = getCurrentBPM();
+        } else if (gameState.chart && gameState.chart.bpms && gameState.chart.bpms.length > 0) {
+            currentBPM = gameState.chart.bpms[0].bpm;
+        }
+
+        const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+        const displayBPM = currentBPM * rate;
+
+        // Throttle BPM Text Update
+        if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
+            setText('hud-val-bpm', displayBPM.toFixed(2));
+            gameState.lastBPMUpdateVal = displayBPM;
+        }
     }
 
     // --- AUTOPLAY LOGIC ---
@@ -2852,7 +3258,11 @@ function gameLoop() {
     gameState.colsActive = [false, false, false, false];
 
     // Determine visible Window
-    const visibleNotes = [];
+    // Reuse static array to reduce GC
+    if (!gameState.visibleNotesCache) gameState.visibleNotesCache = [];
+    const visibleNotes = gameState.visibleNotesCache;
+    visibleNotes.length = 0;
+
     const maxVisibleTime = currentTime + (canvas.height / gameConfig.scrollSpeed) + 2.0; // Buffer
 
     for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
@@ -2915,12 +3325,29 @@ function gameLoop() {
                 }
             } else if (note.type === 'roll') {
                 // Roll logic: check time since last press
-                // If lastPressTime is very old (> 500ms default for rolls? user configurable usually)
-                // Note: roll inputs update note.lastPressTime in handleInput
                 const limit = 0.5; // 500ms roll window
-                if ((currentTime - note.lastPressTime) > limit) {
+                const timeDiff = currentTime - note.lastPressTime;
+
+                if (timeDiff > limit) {
                     note.holdState = 'ng';
                     triggerHoldJudgement(note, false);
+                } else {
+                    // Roll Transparency Feedback (Fade as it gets closer to dying)
+                    // timeDiff 0 -> 1.0 opacity
+                    // timeDiff 0.5 -> 0.0 opacity (or minimal visible)
+                    // Let's keep min opacity 0.3 so it's visible.
+                    // Formula: 1 - (timeDiff / limit)
+                    // We need to pass this alpha to the draw function? 
+                    // The draw function below (drawImage) uses globalAlpha?
+                    // We need to set a custom property on the note for the draw routine to read?
+                    // Or verify if we are drawing the BODY here or later?
+                    // This loop iterates visibleNotes but doesn't DRAW them yet.
+                    // The drawing happens in a separate loop? No.
+                    // Wait, `visibleNotes.forEach` block IS processing. where is drawing?
+
+                    // Ah, this block (3206) is "Process & Draw Visible Notes" but I don't see drawImage calls for Body here.
+                    // Let me check further down.
+                    note.rollAlpha = Math.max(0.2, 1 - (timeDiff / limit));
                 }
             }
         }
@@ -3039,8 +3466,16 @@ function gameLoop() {
         const s = Math.floor(t % 60).toString().padStart(2, '0');
         return `${m}:${s} `;
     };
-    setText('time-elapsed', formatTime(currentTime / rate));
-    setText('time-total', formatTime(totalTime / rate));
+
+    // Throttle Time Updates (e.g. every 500ms or 1s, or just check changed string)
+    // Actually, checking string change in setText handles the DOM part.
+    // But we can avoid the math and template string creation too.
+
+    if (!gameState.lastTimeUpdate || now - gameState.lastTimeUpdate > 500) {
+        setText('time-elapsed', formatTime(currentTime / rate));
+        setText('time-total', formatTime(totalTime / rate));
+        gameState.lastTimeUpdate = now;
+    }
 
     requestAnimationFrame(gameLoop);
 }
@@ -3331,10 +3766,10 @@ function togglePause() {
         const judgesContainer = document.getElementById('pause-judges');
         if (judgesContainer) {
             judgesContainer.innerHTML = judges.map(j => `
-                < div class="p-mini-judge-item" >
+                <div class="p-mini-judge-item">
                     <span class="p-mini-judge-val judge-${j}">${gameState.judgments[j]}</span>
                     <span style="font-size:0.6rem; color:#666; text-transform:uppercase;">${j.substr(0, 3)}</span>
-                </div >
+                </div>
                 `).join('');
         }
 
@@ -3452,6 +3887,8 @@ window.addEventListener('keydown', (e) => {
 
 // Callback from modifiers.js changeRateVal
 window.onRateChange = (newRate) => {
+    updatePreviewAudioSettings();
+
     // Update Banner Display
     const bannerBadge = document.getElementById('ss-rate-badge');
     if (bannerBadge) {
@@ -3528,7 +3965,12 @@ function handleInput(e) {
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
     let currentTime = 0;
     if (gameState.mode === 'stretch' && gameState.audioEl) {
-        currentTime = gameState.audioEl.currentTime;
+        if (!gameState.audioEl.paused) {
+            currentTime = gameState.audioEl.currentTime;
+        } else if (Date.now() < gameState.startTime) {
+            // Countdown phase: Use negative time relative to start (same as gameLoop)
+            currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
+        }
     } else {
         currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
     }
@@ -3576,6 +4018,13 @@ function handleInput(e) {
 
         // Song Time Diff
         const diff = n.time - currentTime;
+
+        // CRITICAL FIX: Ghost Judgements in Empty Space
+        // Prevent matching notes that are unreasonable far.
+        // Hard cap at 2.0s (Song Time) to strictly prevent cross-mapping distant notes
+        // while allowing large windows at high rates (e.g. 3x rate = 0.54s window).
+        if (diff > 2.0) break;
+        if (diff < -2.0) continue;
 
         // Too old? (Late)
         if (diff < -windowSeconds) continue;
@@ -3635,7 +4084,9 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         currentNPS: 0,
         peakNPS: 0,
         bpmTimes: [], // Pre-calculated time-based BPM segments
-        isAutoplay: !!window.isAutoplayLaunch // Set Autoplay State
+        isAutoplay: !!window.isAutoplayLaunch, // Set Autoplay State
+        lastFrameTime: performance.now(),
+        fpsTimer: 0
     };
     window.isAutoplayLaunch = false; // Reset flag
 
@@ -3741,6 +4192,29 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     document.getElementById('failed-overlay').style.display = 'none';
     updateJudgmentTracker();
     updateScoreDisplay();
+
+    // FPS Counter UI Setup
+    const hud = document.getElementById('game-hud');
+    if (hud) {
+        let fpsEl = document.getElementById('hud-fps-counter');
+        if (!fpsEl) {
+            fpsEl = document.createElement('div');
+            fpsEl.id = 'hud-fps-counter';
+            fpsEl.style.position = 'absolute';
+            fpsEl.style.bottom = '10px';
+            fpsEl.style.right = '10px';
+            fpsEl.style.textAlign = 'right';
+            fpsEl.style.fontFamily = "'Mochiy Pop One', 'Inter', sans-serif";
+            fpsEl.style.fontSize = '1.0rem';
+            fpsEl.style.fontWeight = 'bold';
+            fpsEl.style.color = 'rgba(255, 255, 255, 0.5)';
+            fpsEl.style.pointerEvents = 'none';
+            fpsEl.style.zIndex = '100'; // Ensure it's above other HUD elements
+            fpsEl.innerText = "";
+            hud.appendChild(fpsEl);
+        }
+        fpsEl.style.display = 'block';
+    }
 
     // Autoplay UI
     const apInd = document.getElementById('autoplay-indicator');
@@ -4340,6 +4814,7 @@ let currentSongTab = 'info';
 let previewCtx = null;
 let previewLoopId = null;
 let previewAudio = null;
+let previewState = { isLoopingSample: false, sampleStart: 0, sampleLength: 0 };
 let previewStartTime = 0;
 let previewChartData = null;
 let previewPaused = false;
@@ -4873,22 +5348,19 @@ function renderFullLeaderboard() {
 }
 
 async function startChartPreview() {
-    stopChartPreview(); // Reset
+    // Determine target chart
     if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
-
     const song = songLibrary[selectedSongIndex];
     const chart = song.charts[selectedChartIndex];
     if (!song || !chart) return;
 
     // Load Assets Lazy
     if (!previewAssets.arrow) {
-        // Fallback or specific file
         previewAssets.arrow = new Image();
         previewAssets.arrow.src = "_Down Tap Note 1x8.png";
-        previewAssets.holdHead = previewAssets.arrow; // Reuse
+        previewAssets.holdHead = previewAssets.arrow;
         previewAssets.holdBody = new Image();
         previewAssets.holdBody.src = "Down Hold Body Active.png";
-        // We'll use these simple ones
     }
 
     // Setup Stats
@@ -4903,7 +5375,7 @@ async function startChartPreview() {
     // Update Slider
     const slider = document.getElementById('prev-seek');
     if (slider) {
-        slider.max = len + 2; // +buffer
+        slider.max = len + 2;
         slider.value = 0;
     }
 
@@ -4911,49 +5383,86 @@ async function startChartPreview() {
     if (!canvas) return;
     previewCtx = canvas.getContext('2d');
 
-    // Resize wrapper? CSS handles it.
-
-    // Audio Logic
+    // Audio Logic - Sync with existing if possible
     if (song.audioBlob) {
-        // Reuse preview start time from chart meta if available, or 0
-        const previewStart = song.meta.sampleStart || 0;
+        if (!previewAudio) {
+            // Create if missing (e.g. valid song but selectSong audio failed?)
+            const url = URL.createObjectURL(song.audioBlob);
+            previewAudio = new Audio(url);
+            previewAudio.volume = 0.6;
 
-        // We need a fresh audio element or source node.
-        // Let's use HTML5 Audio for simplicity in preview (less syncing requirement than gameplay)
-        if (previewAudio) { // Changed from currentPreviewAudio to previewAudio
-            previewAudio.pause();
-            previewAudio = null;
+            // Add loop listener (shared logic)
+            const start = song.meta.sampleStart || 0;
+            const length = song.meta.sampleLength || 15;
+            previewState.sampleStart = start;
+            previewState.sampleLength = length;
+
+            previewAudio.addEventListener('timeupdate', () => {
+                if (!previewState.isLoopingSample) return;
+                const end = previewState.sampleStart + previewState.sampleLength;
+                const now = previewAudio.currentTime;
+
+                if (now >= end) {
+                    previewAudio.currentTime = previewState.sampleStart;
+                    previewAudio.volume = 0.6;
+                    return;
+                }
+                const fadeDur = 1.5;
+                const remaining = end - now;
+                if (remaining <= fadeDur && remaining > 0) {
+                    previewAudio.volume = 0.6 * (remaining / fadeDur);
+                } else if (Math.abs(previewAudio.volume - 0.6) > 0.01) {
+                    previewAudio.volume = 0.6;
+                }
+            });
         }
 
-        const url = URL.createObjectURL(song.audioBlob);
-        previewAudio = new Audio(url);
-        previewAudio.currentTime = previewStart;
-        previewAudio.volume = 0.5;
-        // previewAudio.loop = true; // Auto loop if not paused
+        // Enter "Full Preview" Mode
+        previewState.isLoopingSample = false;
+        previewAudio.volume = 0.6; // Restore volume if fading
 
-        // Update slider connects to audio time, so we need to loop manually if we want custom seek logic? 
-        // Standard loop works.
-        try {
-            await previewAudio.play();
-            updatePlayBtn(true);
-        } catch (e) { console.warn("Preview autoplay blocked", e); }
+        // Ensure settings are applied (Rate/Pitch)
+        updatePreviewAudioSettings();
+
+        // Ensure playing
+        if (previewAudio.paused) {
+            previewAudio.play().catch(e => { });
+            previewPaused = false;
+        } else {
+            previewPaused = false;
+        }
     } else {
-        previewAudio = { currentTime: 0, pause: () => { }, play: () => { } }; // Mock
+        // Mock
+        previewAudio = { currentTime: 0, pause: () => { }, play: () => { }, volume: 1 };
+        previewPaused = false;
     }
+
+    updatePlayBtn(!previewPaused);
 
     // Chart Data
     previewChartData = chart.notes;
-    previewPaused = false;
+    // Don't call previewLoop if already running?
+    if (previewLoopId) cancelAnimationFrame(previewLoopId);
     previewLoop();
 }
 
 function stopChartPreview() {
     if (previewLoopId) cancelAnimationFrame(previewLoopId);
-    if (previewAudio) {
-        previewAudio.pause();
-        previewAudio = null;
+    previewLoopId = null;
+
+    // Resume "Sample Loop" Mode instead of stopping
+    if (previewAudio && previewState && previewState.sampleLength > 0) {
+        previewState.isLoopingSample = true;
+        // Check bounds
+        const s = previewState.sampleStart;
+        const e = s + previewState.sampleLength;
+        const now = previewAudio.currentTime;
+        if (now < s || now > e) {
+            previewAudio.currentTime = s;
+        }
+        previewAudio.volume = 0.6;
+        if (previewAudio.paused && !previewPaused) previewAudio.play().catch(e => { });
     }
-    updatePlayBtn(false);
 }
 
 function togglePreviewPlayback() {
@@ -4962,11 +5471,25 @@ function togglePreviewPlayback() {
         previewAudio.play();
         previewPaused = false;
         updatePlayBtn(true);
+        previewLoop(); // Restart loop
     } else {
         previewAudio.pause();
         previewPaused = true;
         updatePlayBtn(false);
     }
+}
+
+function updatePreviewAudioSettings() {
+    if (!previewAudio) return;
+    // Use window.modConfig to ensure we access the global state shared with modifiers.js
+    const config = window.modConfig || (typeof modConfig !== 'undefined' ? modConfig : null);
+    const rate = (config && config.rate) ? config.rate : 1.0;
+    const useVinyl = (config && config.pitchShift !== undefined) ? config.pitchShift : true;
+
+    previewAudio.playbackRate = rate;
+    previewAudio.preservesPitch = !useVinyl;
+    previewAudio.mozPreservesPitch = !useVinyl;
+    previewAudio.webkitPreservesPitch = !useVinyl;
 }
 
 function updatePlayBtn(playing) {
@@ -5176,4 +5699,34 @@ function previewLoop() {
     if (!previewPaused) {
         previewLoopId = requestAnimationFrame(previewLoop);
     }
-}    // console.log("Updated Speed:", type, val, "=>", targetSpeed, "BPM:", getCurrentBPM());
+}
+
+// --- Global Input Handler for Preview ---
+window.addEventListener('keydown', (e) => {
+    // Check if we are in Setup Panel (Song Select)
+    const setupPanel = document.getElementById('setup-panel');
+    if (!setupPanel || setupPanel.style.display === 'none') return;
+
+    // Spacebar: Toggle Pause (Global in Song Select)
+    if (e.code === 'Space') {
+        e.preventDefault();
+        togglePreviewPlayback();
+    }
+
+    // Arrows: Seek (Only in Preview Tab)
+    if (typeof currentSongTab !== 'undefined' && currentSongTab === 'preview') {
+        if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
+            // Seek with arrows
+            if (previewAudio) {
+                e.preventDefault();
+                const step = 5; // 5 seconds
+                const dir = e.code === 'ArrowRight' ? 1 : -1;
+                let newTime = previewAudio.currentTime + (step * dir);
+                if (previewAudio.duration) {
+                    newTime = Math.max(0, Math.min(newTime, previewAudio.duration));
+                }
+                previewAudio.currentTime = newTime;
+            }
+        }
+    }
+});
