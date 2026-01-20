@@ -876,22 +876,8 @@
 
         <!-- Pause Menu was here, moved to root -->
 
-        <!-- Sync Overlay -->
-        <div id="sync-overlay"
-            style="display:none; position:absolute; top:20%; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.8); padding:20px; border:2px solid #66ccff; border-radius:10px; text-align:center;">
-            <h2 style="color:#66ccff; margin:0 0 10px 0;">SYNC CALIBRATION</h2>
-            <div style="font-family:monospace; font-size:1.2rem; color:#fff;">
-                Sampled Notes: <span id="sync-count" style="color:#ffcc00">0</span> / 24 <br>
-                Std Dev: <span id="sync-stddev" style="color:#ffcc00">0.00</span> ms <br>
-                Previous Offset: <span id="sync-old-offset">0</span> ms <br>
-                <div style="margin-top:10px; font-size:1.5rem;">
-                    New Offset: <span id="sync-new-offset" style="color:#66cc66">0</span> ms
-                </div>
-            </div>
-            <div style="margin-top:10px; font-size:0.8rem; color:#aaa;">
-                Press ESC to Exit & Apply
-            </div>
-        </div>
+        <!-- Sync Overlay is now dynamically created in JS -->
+
 
         <!-- Results Screen -->
         <div id="results-screen" style="display:none;">

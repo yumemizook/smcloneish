@@ -599,6 +599,12 @@ body {
 .setting-group {
     margin-bottom: 30px;
     text-align: center;
+    min-height: 200px;
+    /* Fit keybind visualizer & Prevent Layout Shift */
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    /* Align top, let gap handle spacing */
 }
 
 .setting-group h3 {
@@ -606,6 +612,7 @@ body {
     padding-bottom: 5px;
     margin-bottom: 15px;
     display: block;
+    width: 100%;
 }
 
 .setting-row-col {
@@ -690,6 +697,22 @@ body {
 .ss-bs-acc {
     font-size: 1rem;
     color: #00e5ff;
+}
+
+#bs-judge-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+#bs-actions {
+    display: flex;
+    gap: 5px;
+    margin-left: 10px;
+    align-items: center;
 }
 
 .close-btn {

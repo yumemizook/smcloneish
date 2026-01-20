@@ -23,6 +23,8 @@ window.userConfig = userConfig;
 
 let bindingIndex = -1; // -1 = none, 0-3 = column
 let bindingType = null; // 'pause', 'retry', 'rateUp', 'rateDown' or null
+let isSyncMode = false; // Global sync calibration flag
+let syncBuffer = []; // Global buffer for sync offsets
 
 function loadUserConfig() {
     const saved = localStorage.getItem('webSM_config');
@@ -1383,6 +1385,15 @@ function selectDifficulty(chartIndex) {
                 addJ(J.good, "#0099ff");
                 addJ(J.bad, "#aa00ff");
                 addJ(J.miss, "#ff3333");
+
+                // Render Buttons (Inline with Judgments)
+                const hasReplay = top.replayLog && top.replayLog.length > 0;
+                const btnStyle = "background:rgba(255,255,255,0.1); color:#fff; border:1px solid #555; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;";
+                const resBtn = `<button onclick='viewScoreResults(${JSON.stringify(top)})' style='${btnStyle}'>📄 Results</button>`;
+                const repBtn = hasReplay ? `<button onclick='startReplay(${JSON.stringify(top)}, songLibrary[selectedSongIndex], songLibrary[selectedSongIndex].charts[selectedChartIndex])' style='${btnStyle} color:#00e5ff; border-color:#00e5ff;'>▶ Replay</button>` : "";
+
+                // Append as a group to keep them together
+                jGrid.innerHTML += `<div id="bs-actions">${resBtn}${repBtn}</div>`;
             }
 
         } else {
@@ -1405,8 +1416,10 @@ function selectDifficulty(chartIndex) {
     }
 
     const btn = document.getElementById('start-btn');
-    btn.disabled = false;
-    btn.innerText = "START GAME";
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = "START GAME";
+    }
 
     if (typeof currentSongTab !== 'undefined' && currentSongTab === 'preview') {
         startChartPreview();
@@ -1669,6 +1682,131 @@ function startAutoplay() {
     startGameFromMenu();
 }
 
+function startReplay(scoreData, song, chart) {
+    if (!scoreData || !scoreData.replayLog) {
+        alert("No replay data available for this score.");
+        return;
+    }
+
+    // Restore Modifiers for Replay
+    if (scoreData.rate) {
+        if (typeof modConfig === 'undefined') window.modConfig = {};
+        modConfig.rate = scoreData.rate;
+        // User config might need temp override or we just rely on modConfig having priority
+        // Modifiers.js usually reads modConfig.
+    }
+
+    // Set Global Flags
+    window.isReplayLaunch = true;
+    window.replayData = scoreData.replayLog;
+
+    // Use specific chart
+    selectedSongIndex = songLibrary.indexOf(song);
+    selectedChartIndex = song.charts.indexOf(chart);
+    startGameFromMenu();
+} window.startReplay = startReplay;
+
+function startSyncCalibration() {
+    // 0. Check if songLibrary[0] is the sync song
+    if (!songLibrary || songLibrary.length === 0 || (!songLibrary[0].meta.title.includes("Sync") && songLibrary[0].meta.title !== "Sync (Missing)")) {
+        if (songLibrary[0] && songLibrary[0].meta.title === "Sync (Missing)") {
+            alert("Sync song not loaded. Check ./sync/ folder.");
+            return;
+        }
+        // If 0 isn't sync, maybe we search?
+        // But loadLocalSong puts it at 0.
+        // If it's not there, we can't calibrate.
+        alert("Sync song not found at index 0.");
+        return;
+    }
+
+    // 0. Save original modifiers for restoration
+    window.originalSyncMods = {
+        downScroll: userConfig.downScroll,
+        scrollTime: userConfig.scrollTime,
+        failMode: modConfig ? modConfig.failMode : 'on',
+        scrollDir: modConfig ? modConfig.scrollDirection : 'down',
+        speedType: userConfig.modifiers ? userConfig.modifiers.speedType : 'X',
+        speedValue: userConfig.modifiers ? userConfig.modifiers.speedValue : 1.0
+    };
+
+    // 1. Set Mode
+    window.isSyncMode = true;
+    window.syncBuffer = [];
+    window.lastHitOffset = null; // Reset for new session
+
+    // 2. Enforce Modifiers (C400, Fail Off, Upscroll)
+    if (typeof modConfig === 'undefined') window.modConfig = {};
+    modConfig.scrollSpeed = 400; // C400
+    modConfig.scrollDirection = 'up'; // Upscroll
+    modConfig.failMode = 'off'; // Fail Off
+    modConfig.rate = 1.0; // Enforce 1.0x rate
+    modConfig.pitchShift = true; // Default
+
+    // Update User Config to match for renderer
+    userConfig.downScroll = false;
+    userConfig.scrollTime = 400;
+
+    // CRITICAL: Set modifiers for updateScrollSpeed
+    if (!userConfig.modifiers) userConfig.modifiers = {};
+    userConfig.modifiers.speedType = 'C';
+    userConfig.modifiers.speedValue = 400;
+
+    // 3. Hide UI Elements (Manual toggle or class)
+    // We will restore them in quitGame()
+    // Comprehensive list based on index.html structure:
+    const hideIds = [
+        'hud-top-left',       // Diff, BPM, Rate
+        'judgment-tracker',   // Tally
+        'live-grade',         // Grade
+        'hud-right-panel',    // NPS, Life (Health display)
+        'hud-acc-box',        // Accuracy Box (Accuracy%)
+        'combo',              // Combo
+        'npsGraph',           // NPS Graph
+        'hud-tracker',        // Target Tracker
+        'error-bar-container',// Error Bar
+        'progress-container', // Progress Bar
+        'hud-song-info',       // Title/Artist
+        'hud-fps-counter'     // FPS (Optional, but user said "hide UI")
+    ];
+    hideIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.visibility = 'hidden';
+    });
+
+    // 4. Select Song
+    selectedSongIndex = 0;
+    selectedChartIndex = 0;
+
+    // 5. Close Settings
+    const modModal = document.getElementById('modifiers-modal');
+    if (modModal) modModal.style.display = 'none';
+
+    // 6. Start
+    startGameFromMenu();
+
+    // 7. Initialize Instruction Text
+    let instr = document.getElementById('sync-instruction');
+    if (!instr) {
+        instr = document.createElement('div');
+        instr.id = 'sync-instruction';
+        instr.style.position = 'absolute';
+        instr.style.top = '40%';
+        instr.style.left = '50%';
+        instr.style.transform = 'translate(-50%, -50%)';
+        instr.style.color = '#fff';
+        instr.style.fontSize = '2rem';
+        instr.style.fontFamily = "'Mochiy Pop One', sans-serif";
+        instr.style.textAlign = 'center';
+        instr.style.opacity = '0';
+        instr.style.pointerEvents = 'none';
+        instr.style.zIndex = '9999';
+        instr.style.textShadow = '0 0 10px rgba(0,229,255,0.8)';
+        instr.innerText = 'Keep tapping to the beat';
+        document.body.appendChild(instr);
+    }
+} window.startSyncCalibration = startSyncCalibration;
+
 // ** START GAME **
 async function startGameFromMenu() {
     if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
@@ -1726,6 +1864,18 @@ async function startGameFromMenu() {
             const gameChart = { ...chart, notes: finalNotes };
 
             initGame(gameChart, decoded, song.meta, difficultyCalc, audioUrl);
+
+            // Resets for Sync Mode Enhancements
+            if (window.isSyncMode) {
+                window.syncBatch = [];
+                // We keep validBatches across retries to collect more data?
+                // Actually, let's keep validBatches but clear current batch.
+                // Or if the user retries, they might want a fresh start.
+                // Let's keep validBatches until they quit.
+                if (typeof window.validBatches === 'undefined') window.validBatches = [];
+                const instr = document.getElementById('sync-instruction');
+                if (instr) instr.style.opacity = '0';
+            }
         } catch (e) {
             console.error("Error decoding audio: " + e.message);
             document.getElementById('bs-grade').className = 'ss-bs-grade';
@@ -1937,6 +2087,40 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
     if (!isMiss && note.type !== 'mine') {
         gameState.hitOffsets.push(offsetMs);
         gameState.recentHits.push({ offset: offsetMs, time: Date.now() });
+
+        // Sync Mode: Real-time accumulation
+        if (window.isSyncMode) {
+            // New Batching Logic
+            if (typeof window.syncBatch === 'undefined') window.syncBatch = [];
+            window.syncBatch.push(offsetMs);
+
+            if (window.syncBatch.length >= 24) {
+                const sd = calculateSD(window.syncBatch);
+                const mean = window.syncBatch.reduce((a, b) => a + b, 0) / window.syncBatch.length;
+
+                if (typeof window.validBatches === 'undefined') window.validBatches = [];
+                if (typeof window.syncHistory === 'undefined') window.syncHistory = [];
+
+                const isValid = sd <= 30;
+                if (isValid) {
+                    window.validBatches.push(mean);
+                }
+
+                window.syncHistory.push({
+                    mean: mean,
+                    sd: sd,
+                    valid: isValid,
+                    time: Date.now()
+                });
+
+                window.syncBatch = []; // Clear for next batch
+            }
+
+            // Still push to buffer for overall stats if needed, or rely on batches
+            window.syncBuffer.push(offsetMs);
+            window.lastHitOffset = offsetMs; // Track for overlay
+            updateSyncStats();
+        }
     }
 
     if (note.type === 'mine') {
@@ -2131,8 +2315,14 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 
     // Check for Fail
     if (userConfig.failMode === 'on' && gameState.life <= 0) { triggerFail(); return; }
+    // Completion Check
     if (gameState.totalNotesHitOrMissed >= gameState.totalNotesInChart) {
-        if (userConfig.failMode === 'end' && gameState.life <= 0) triggerFail();
+        // SYNC MODE: Don't show results, rely on loop logic
+        if (window.isSyncMode) {
+            return; // Skip results screen, let loop handle restart
+        }
+
+        if (gameState.failed) showResults();
         else setTimeout(showResults, 2000);
     }
 }
@@ -2526,11 +2716,17 @@ function handleLeaderboard() {
             // Judge Badge if saved
             const jBadge = entry.judgeDiff ? `<span style="font-size:0.7em; color:#666; margin-left:5px">J${entry.judgeDiff}</span>` : "";
 
+            const hasReplay = entry.replayLog && entry.replayLog.length > 0;
+            const btnStyle = "background:none; border:none; color:#ddd; cursor:pointer; font-size:0.8rem; margin-left:5px; padding:0;";
+            const resBtn = `<button onclick='viewScoreResults(${JSON.stringify(entry)})' style='${btnStyle}' title='View Results'>📄</button>`;
+            const repBtn = hasReplay ? `<button onclick='startReplay(${JSON.stringify(entry)}, songLibrary[selectedSongIndex], songLibrary[selectedSongIndex].charts[selectedChartIndex])' style='${btnStyle} color:#00e5ff;' title='Watch Replay'>▶</button>` : "";
+
             div.innerHTML = `
                 <span class="lb-rank">#${i + 1}</span>
                 <span class="lb-score">${displayScore}</span>
                 <span class="lb-grade">${entry.grade}${jBadge}</span>
                 <span class="lb-acc">${origAcc}</span>
+                <span class="lb-actions" style="margin-left:auto;">${resBtn}${repBtn}</span>
             `;
 
             // Hover Logic
@@ -2764,6 +2960,38 @@ function quitGame() {
 
     const apInd = document.getElementById('autoplay-indicator');
     if (apInd) apInd.style.display = 'none';
+
+    // Replay Cleanup
+    const repUI = document.getElementById('replay-ui-container');
+    if (repUI) repUI.remove();
+
+    // RESTORE SYNC MODS & UI
+    if (window.isSyncMode && window.originalSyncMods) {
+        userConfig.downScroll = window.originalSyncMods.downScroll;
+        userConfig.scrollTime = window.originalSyncMods.scrollTime;
+        if (typeof modConfig !== 'undefined') {
+            modConfig.failMode = window.originalSyncMods.failMode;
+            modConfig.scrollDirection = window.originalSyncMods.scrollDir;
+        }
+        if (userConfig.modifiers) {
+            userConfig.modifiers.speedType = window.originalSyncMods.speedType;
+            userConfig.modifiers.speedValue = window.originalSyncMods.speedValue;
+        }
+        window.originalSyncMods = null;
+
+        // Restore UI Elements (Sync Mode)
+        const restoreIds = [
+            'hud-top-left', 'judgment-tracker', 'live-grade', 'hud-right-panel',
+            'hud-acc-box', 'combo', 'npsGraph', 'hud-tracker', 'error-bar-container',
+            'progress-container', 'hud-song-info', 'hud-fps-counter'
+        ];
+        restoreIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.visibility = 'visible';
+        });
+    }
+    window.isSyncMode = false;
+    // Do NOT force hud display block here, let setScreen handle it.
 }
 window.quitGame = quitGame;
 
@@ -2796,6 +3024,56 @@ function setupCanvas() {
     updateScrollSpeed((typeof modConfig !== 'undefined' ? modConfig.rate : 1.0));
 }
 function getNoteRowIndex(beat) { const b = Math.abs(beat); const epsilon = 0.01; const isSnap = (div) => Math.abs((b * div) - Math.round(b * div)) < epsilon; if (isSnap(1)) return 0; if (isSnap(2)) return 1; if (isSnap(3)) return 2; if (isSnap(4)) return 3; if (isSnap(6)) return 4; if (isSnap(8)) return 5; if (isSnap(12)) return 6; return 7; }
+function stepReplay(dir) {
+    if (!gameState.isPaused || !gameState.isReplay) return;
+
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    const dt = dir * 0.0166; // 1 frame (60fps) approx
+
+    if (gameState.mode === 'stretch' && gameState.audioEl) {
+        gameState.audioEl.currentTime = Math.max(0, gameState.audioEl.currentTime + dt);
+    } else {
+        // Vinyl Mode
+        // Time = (AudioCtx - Start) * Rate
+        // Start = AudioCtx - (Time/Rate)
+        // We want TimeNew = TimeOld + dt
+        // StartNew = AudioCtx - (TimeOld + dt)/Rate
+        // StartNew = AudioCtx - (TimeOld/Rate) - (dt/Rate)
+        // StartNew = StartOld - (dt/Rate)
+        gameState.startTime -= (dt / rate);
+    }
+
+    gameState.singleFrameStep = true;
+    requestAnimationFrame(gameLoop);
+} window.stepReplay = stepReplay;
+
+function viewScoreResults(entry) {
+    if (!entry.detailedHits) {
+        alert("Detailed data missing for this score.");
+        return;
+    }
+
+    // Hydrate
+    gameState.score = entry.score;
+    gameState.judgments = entry.judgments || { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0, ok: 0, ng: 0, mine: 0 };
+    gameState.maxCombo = entry.maxCombo || 0;
+
+    gameState.detailedHits = entry.detailedHits;
+    gameState.hitOffsets = entry.detailedHits.filter(h => h.offset !== null).map(h => h.offset);
+    gameState.accumulatedAccuracyPoints = parseFloat(entry.acc) * entry.detailedHits.length;
+    gameState.totalNotesHitOrMissed = entry.detailedHits.length;
+    // Clear graphs
+    gameState.accuracyHistory = [];
+    gameState.lifeHistory = [];
+    gameState.comboHistory = [];
+    gameState.npsHistory = [];
+    gameState.pauseCount = 0; // Don't show pause count from stored? Or entry doesn't have it.
+
+    gameState.failed = (entry.grade === 'F' || entry.fcType === 'Fail');
+    gameState.meta = songLibrary[selectedSongIndex].meta; // Ensure meta matches current selection
+
+    showResults();
+} window.viewScoreResults = viewScoreResults;
 function drawReceptor(x, y, rotation, colIndex) {
     ctx.save(); const halfSize = gameConfig.columnWidth / 2; ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2; if (assets.loaded.receptorSprite) { const img = assets.receptorSprite; const sx = gameState.heldKeys[colIndex] ? img.width / 2 : 0; ctx.drawImage(img, sx, 0, img.width / 2, img.height, offset, offset, drawSize, drawSize); } else { ctx.beginPath(); const s = drawSize / 2.5; ctx.strokeStyle = gameState.heldKeys[colIndex] ? '#fff' : '#aaa'; ctx.lineWidth = 4; ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(s / 2, 0); ctx.lineTo(s / 2, s); ctx.lineTo(-s / 2, s); ctx.lineTo(-s / 2, 0); ctx.lineTo(-s, 0); ctx.closePath(); ctx.stroke(); }
 
@@ -2822,33 +3100,49 @@ function drawNote(note, y, rotation) {
     let alpha = 1.0;
 
     // 1. Appearance (Hidden/Sudden/Stealth)
-    if (modConfig.appearance) {
+    // OR Sync Mode enforced fade (TIME-BASED, not note-based)
+    let enforceSyncFade = false;
+    if (window.isSyncMode && typeof gameState !== 'undefined' && gameState.startTime) {
+        // Get current song time
+        const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+        let songTime = 0;
+        if (gameState.mode === 'stretch' && gameState.audioEl) {
+            songTime = gameState.audioEl.currentTime;
+        } else if (audioCtx) {
+            songTime = (audioCtx.currentTime - gameState.startTime) * rate;
+        }
+
+        // Fade starts after 4 seconds of song time
+        // At 4s: alpha = 1, at 8s: alpha = 0
+        if (songTime > 4.0) {
+            enforceSyncFade = true;
+            const fadeDuration = 4.0; // Fade over 4 seconds
+            const fadeProgress = Math.min((songTime - 4.0) / fadeDuration, 1.0);
+            alpha = 1.0 - fadeProgress; // Gradually fade to 0
+        }
+    }
+
+
+    if (modConfig.appearance && !enforceSyncFade) {
         const type = modConfig.appearance.type;
         const offsetPct = modConfig.appearance.offset || 50;
         const offsetVal = offsetPct / 100;
 
         // Calculate relative position 0..1 (0 = Receptor, 1 = Bottom/Top of screen)
-        // This depends on scroll direction and arrow Y relative to receptor.
-        // Simple approx: Distance from receptor in pixels.
         const dist = Math.abs(y - gameConfig.receptorY);
         const screenH = canvas.height;
 
         if (type === 'stealth') {
             alpha = 0;
         } else if (type === 'hidden') {
-            // Fade out as it gets closer. 
-            // Visible at distance, invisible at receptor.
-            // Fade start: offsetVal * screenH. Fade End: Receptor.
-            const fadePoint = offsetVal * (screenH * 0.5) + 50; // Scaling
+            const fadePoint = offsetVal * (screenH * 0.5) + 50;
             if (dist < fadePoint) {
                 alpha = dist / fadePoint;
             }
         } else if (type === 'sudden') {
-            // Invisible at distance, fade in near receptor.
             const fadePoint = offsetVal * (screenH * 0.5) + 50;
             if (dist > fadePoint) alpha = 0;
             else {
-                // Fade in: dist 0 = alpha 1. dist fadePoint = alpha 0.
                 alpha = 1 - (dist / fadePoint);
             }
         }
@@ -3121,7 +3415,13 @@ function drawNPSGraph() {
     ctx.stroke();
 }
 function gameLoop() {
-    if (!gameState.isPlaying || gameState.isPaused) return;
+    if (!gameState.isPlaying || (gameState.isPaused && !gameState.singleFrameStep)) return;
+    if (gameState.singleFrameStep) {
+        gameState.singleFrameStep = false;
+        // Logic will run once then next frame will start. 
+        // We don't change isPaused here, so next frame recursion (requestAnimationFrame) will be blocked again.
+        // However, we invoke requestAnimationFrame at the end.
+    }
 
     // FPS / Latency Calculation
     const now = performance.now();
@@ -3184,57 +3484,44 @@ function gameLoop() {
         currentTime += (userConfig.globalOffset / 1000);
     }
 
-    // --- SYNC CALIBRATION LOGIC ---
-    if (isSyncMode) {
-        // 1. Update Sync Stats UI
-        updateSyncStats();
+    // --- SYNC INSTRUCTION FADE-IN ---
+    if (window.isSyncMode) {
+        const instr = document.getElementById('sync-instruction');
+        if (instr) {
+            // Fade in between 4s and 5s
+            if (currentTime > 4.0) {
+                const opacity = Math.min(1, currentTime - 4.0);
+                instr.style.opacity = opacity.toString();
+            } else {
+                instr.style.opacity = '0';
+            }
+        }
+    }
 
-        // 2. Loop Logic
-        // Check if song ended or we far past last note
+
+    // --- SYNC CALIBRATION LOOP (Retry-based approach) ---
+    if (window.isSyncMode) {
+        // Update Sync Stats UI
+        if (typeof lastSyncCount === 'undefined' || lastSyncCount !== window.syncBuffer.length) {
+            updateSyncStats();
+            lastSyncCount = window.syncBuffer.length;
+        }
+
+        // Check if chart ended - if so, restart via retry
         const lastNote = gameState.notes[gameState.notes.length - 1];
         if (lastNote && currentTime > lastNote.time + 1.0) {
-            // Reset
-            // We need to keep the syncBuffer!
-            // Don't call resetGameState() fully if it wipes syncBuffer.
-            // resetGameState IS wiping stats. syncBuffer is global though.
-            // But gameState.detailedHits is cleared, which we might want?
-            // Actually detailedHits is per-run. syncBuffer accumulates across loops?
-            // User wants "sampled notes" to accumulate? 
-            // "restart the chart... does not stop until esc key".
-            // Yes, accumulate samples.
 
-            // We need to push detailedHits offsets to syncBuffer first
-            gameState.detailedHits.forEach(h => {
-                if (h.offset !== null) syncBuffer.push(h.offset);
-            });
 
-            // Clear detailedHits for next pass
-            gameState.detailedHits = [];
+            // Stop current game
+            if (window.audioSource) try { window.audioSource.stop(); } catch (e) { }
+            if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
+            gameState.isPlaying = false;
 
-            // Restart Audio
-            if (audioCtx) {
-                // Stop old source?
-                // gameLoop calls startEngine? No.
-                // We just need to reset time.
-                // AudioContext timing is monotonic. We must reset StartTime.
-                gameState.startTime = audioCtx.currentTime + 1.0;
-                gameState.firstActiveNoteIndex = 0;
-                // Reset note processed flags
-                gameState.notes.forEach(n => { n.processed = false; n.hit = false; n.holdState = 'inactive'; });
+            // Restart the chart using the normal game start function
+            startGameFromMenu().catch(e => console.error('[SYNC] Restart failed:', e));
 
-                // Re-create source if needed (Vinyl Buffer Source is one-shot)
-                if (window.audioSource) {
-                    try { window.audioSource.stop(); } catch (e) { }
-                    window.audioSource = audioCtx.createBufferSource();
-                    window.audioSource.buffer = audioBuffer;
-                    window.audioSource.playbackRate.value = rate;
-                    window.audioSource.connect(audioCtx.destination);
-                    window.audioSource.start(gameState.startTime);
-                } else if (gameState.audioEl) {
-                    gameState.audioEl.currentTime = 0;
-                    gameState.audioEl.play();
-                }
-            }
+            // Exit game loop - it will restart with fresh state
+            return;
         }
     }
 
@@ -3334,22 +3621,41 @@ function gameLoop() {
             // 1. Hit new notes
             if (!n.processed && n.holdState !== 'active' && n.type !== 'mine') {
                 if (n.time <= currentTime) {
-                    n.hit = true;
-                    // Simulate Key Press Visual
-                    gameState.heldKeys[n.col] = true;
-                    triggerJudgement(n, 0, false);
-
-                    // Note: triggerJudgement(hold) -> sets holdState='active'
+                    processInput(n.col, 'down', currentTime, rate);
+                    setTimeout(() => processInput(n.col, 'up', currentTime, rate), 50);
                 }
             }
-
             // 2. Maintain active Holds/Rolls
             if ((n.type === 'hold' || n.type === 'roll') && n.holdState === 'active') {
+                // processInput handles hold maintenance if 'down' is sent? 
+                // processInput logic sets holds[col]=true but doesn't re-trigger hit.
+                // But it updates roll lastPressTime? 
+                // Actually the roll logic in processInput is: IF keydown, update lastPressTime.
+                // Autoplay simulates KEY HOLD.
                 gameState.heldKeys[n.col] = true;
                 if (n.type === 'roll') n.lastPressTime = currentTime;
             }
         }
     }
+
+    // --- REPLAY LOGIC ---
+    if (gameState.isReplay && gameState.replayLog) {
+        const log = gameState.replayLog;
+        // Process events up to current time
+        while (gameState.replayIndex < log.length) {
+            const evt = log[gameState.replayIndex];
+            // Check time. evt.t is Song Time.
+            if (evt.t <= currentTime) {
+                // Apply Event
+                const type = evt.e === 1 ? 'down' : 'up';
+                processInput(evt.c, type, currentTime, rate);
+                gameState.replayIndex++;
+            } else {
+                break;
+            }
+        }
+    }
+
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -3387,6 +3693,8 @@ function gameLoop() {
 
         visibleNotes.push(note);
     }
+
+
 
     const spriteRotations = [90, 0, 180, 270];
     const vectorRotations = [270, 180, 0, 90];
@@ -3591,6 +3899,15 @@ function gameLoop() {
 function openSettings() {
     setScreen('settings-modal');
 
+    // Mute Audio in Settings
+    if (typeof previewAudio !== 'undefined' && previewAudio) {
+        previewAudio.pause();
+    }
+    // Also stop chart preview loop
+    if (typeof previewLoopId !== 'undefined' && previewLoopId) {
+        cancelAnimationFrame(previewLoopId);
+    }
+
     // Update Buttons
     for (let i = 0; i < 4; i++) {
         const btn = document.getElementById(`key-btn-${i}`);
@@ -3633,6 +3950,13 @@ function openSettings() {
         };
         window.addEventListener('keydown', window.keyTestListener);
         window.addEventListener('keyup', window.keyTestListener);
+    }
+
+    // Initialize offset display
+    const offsetDisplay = document.getElementById('val-global-offset');
+    if (offsetDisplay) {
+        const currentOffset = userConfig.globalOffset || 0;
+        offsetDisplay.innerText = currentOffset.toFixed(0) + "ms";
     }
 }
 window.openSettings = openSettings;
@@ -4067,59 +4391,84 @@ function handleInput(e) {
         }
 
         // --- SYNC MODE EXIT LOGIC ---
-        if (typeof isSyncMode !== 'undefined' && isSyncMode) {
+        // SYNC MODE: Don't show results, rely on loop logic
+        if (window.isSyncMode) {
             if (e.type !== 'keydown') return;
 
-            // Calculate Suggested Offset
-            let suggested = userConfig.globalOffset;
-            let msg = "Exit Sync Calibration?\n(No changes will be applied)";
+            // Calculate Suggested Offset based on VALID Batches
+            let suggestedCorrection = 0;
+            const validCount = (window.validBatches || []).length;
+            const totalCount = (window.syncHistory || []).length;
 
-            if (syncBuffer.length > 0) {
-                const mean = syncBuffer.reduce((a, b) => a + b, 0) / syncBuffer.length;
-                const sd = calculateSD(syncBuffer);
-                // Correction:
-                // If mean is +50ms (Early input / Visuals Late), we need to correct by -50ms?
-                // Standard Global Offset: Time += Offset.
-                // If we add -50ms, Time decreases. Notes appear "higher" (Earlier in scroll).
-                // Wait.
-                // If I hit +50ms (Early), I hit before the note reached receptor.
-                // Note was "too high".
-                // I need note to be LOWER.
-                // Note Y = (NoteTime - Time) * Speed.
-                // To make Y smaller, NoteTime - Time must be smaller.
-                // So Time must be LARGER.
-                // So I need to ADD to Time.
-                // So I need to ADD the ERROR (+50) to the offset?
-                // Let's verify.
-                // Existing Offset: 0. Mean Error: +50.
-                // I want Time to be +50 larger.
-                // New Offset = Old + Mean.
-                // Let's TRY this direction.
-                suggested = userConfig.globalOffset + mean;
-
-                msg = `Exit and Apply Calculated Offset?\n\nMean Error: ${mean.toFixed(2)}ms\nStd Dev: ${sd.toFixed(2)}ms\n\nCurrent Offset: ${userConfig.globalOffset.toFixed(0)}ms\nNew Offset: ${suggested.toFixed(0)}ms`;
+            if (validCount > 0) {
+                suggestedCorrection = window.validBatches.reduce((a, b) => a + b, 0) / validCount;
             }
 
-            if (confirm(msg)) {
+            let msg = "Exit Sync Calibration?\n(No changes will be applied)";
+
+            if (validCount > 0) {
+                const finalOffset = userConfig.globalOffset + suggestedCorrection;
+                msg = `Exit and Apply Recommended Offset?\n\n` +
+                    `Valid Batches: ${validCount} / ${totalCount}\n` +
+                    `Suggested Correction: ${suggestedCorrection.toFixed(2)}ms\n\n` +
+                    `Current Global Offset: ${userConfig.globalOffset.toFixed(0)}ms\n` +
+                    `New Global Offset: ${finalOffset.toFixed(0)}ms`;
+            } else if (totalCount > 0) {
+                msg = `Exit Sync Calibration?\n\nWarning: No valid batches were collected (SD was too high).\nNo changes will be applied.`;
+            }
+
+            if (validCount > 0 && confirm(msg)) {
                 // Apply
-                if (syncBuffer.length > 0) {
-                    adjustGlobalOffset(suggested - userConfig.globalOffset); // Delta
-                    saveUserConfig();
-                }
+                adjustGlobalOffset(suggestedCorrection); // adjustGlobalOffset handles delta
+                saveUserConfig();
 
                 // Exit Sync Mode
-                // Reset flags
-                isSyncMode = false;
-                syncBuffer = [];
-                // Restore UI
-                document.getElementById('sync-overlay').style.display = 'none';
-                document.getElementById('game-hud').style.display = 'block'; // Or whatever screen we go to
-                quitGame(); // Go back to setup
+                window.isSyncMode = false;
+                window.syncBuffer = [];
+                window.syncBatch = [];
+                window.validBatches = [];
+                window.syncHistory = [];
 
-                // Restore Modifiers?
-                // modConfig was modified implicitly (set speed/fail).
-                // We should probably restore them if we stored them, or just let user reset.
-                // For now, let's just quitGame which goes to setup.
+                // Restore UI
+                const overlay = document.getElementById('sync-overlay');
+                if (overlay) overlay.style.display = 'none';
+                const instr = document.getElementById('sync-instruction');
+                if (instr) instr.remove();
+
+                quitGame();
+                // Redirect back to settings
+                setTimeout(() => { openSettings(); switchSettingsTab('audio'); }, 100);
+            } else if (validCount === 0 && confirm(msg)) {
+                // Just exit
+                window.isSyncMode = false;
+                window.syncBuffer = [];
+                window.syncBatch = [];
+                window.validBatches = [];
+                window.syncHistory = [];
+
+                const overlay = document.getElementById('sync-overlay');
+                if (overlay) overlay.style.display = 'none';
+                const instr = document.getElementById('sync-instruction');
+                if (instr) instr.remove();
+
+                quitGame();
+                // Redirect back to settings
+                setTimeout(() => { openSettings(); switchSettingsTab('audio'); }, 100);
+            } else if (validCount > 0) {
+                // Cancelled application - Discard changes and exit
+                window.isSyncMode = false;
+                window.syncBuffer = [];
+                window.syncBatch = [];
+                window.validBatches = [];
+                window.syncHistory = [];
+
+                const overlay = document.getElementById('sync-overlay');
+                if (overlay) overlay.style.display = 'none';
+                const instr = document.getElementById('sync-instruction');
+                if (instr) instr.remove();
+
+                quitGame();
+                setTimeout(() => { openSettings(); switchSettingsTab('audio'); }, 100);
             }
             return;
         }
@@ -4141,7 +4490,7 @@ function handleInput(e) {
         if (!gameState.audioEl.paused) {
             currentTime = gameState.audioEl.currentTime;
         } else if (Date.now() < gameState.startTime) {
-            // Countdown phase: Use negative time relative to start (same as gameLoop)
+            // Countdown phase
             currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
         }
     } else {
@@ -4152,10 +4501,29 @@ function handleInput(e) {
     const colIndex = userConfig.keys.indexOf(key);
     if (colIndex === -1) return;
 
-    // BLOCK INPUT IF AUTOPLAY
-    if (gameState.isAutoplay) return;
+    // BLOCK INPUT IF AUTOPLAY or REPLAY
+    if (gameState.isAutoplay || gameState.isReplay) return;
 
-    if (e.type === 'keydown') {
+    const type = e.type === 'keydown' ? 'down' : 'up';
+
+    // RECORDING
+    if (!gameState.failed && !gameState.isPaused) {
+        // Simple compression: t=time, c=col, e=event(0:down, 1:up)
+        // Store string fixed to save space? or number? Number is fine JSON handles it.
+        // using '1' and '0' for type might be slightly smaller in JSON than 'down'/'up'
+        gameState.replayLog.push({
+            t: parseFloat(currentTime.toFixed(3)),
+            c: colIndex,
+            e: type === 'down' ? 1 : 0
+        });
+    }
+
+    processInput(colIndex, type, currentTime, rate);
+
+} window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
+
+function processInput(colIndex, type, currentTime, rate) {
+    if (type === 'down') {
         gameState.heldKeys[colIndex] = true;
 
         // Optimization: Find active roll to start holding
@@ -4165,59 +4533,48 @@ function handleInput(e) {
             if (n.time > currentTime + (2.0 * rate)) break;
 
             if (n.col === colIndex && n.type === 'roll' && n.holdState === 'active') {
-                // n.lastPressTime is used for roll drop check (real time delta usually)
-                // Let's store Real Time of press for roll logic consistency or Song Time?
-                // roll logic (lines 2508) uses (currentTime - note.lastPressTime). 
-                // In gameLoop, currentTime is Song Time. 
-                // So updating with Song Time here is consistent.
                 n.lastPressTime = currentTime;
                 break;
             }
         }
-    }
 
-    if (e.type === 'keyup') gameState.heldKeys[colIndex] = false;
+        // Hit Detection
+        // Find Hittable Note
+        let hittableNote = null;
+        const windowSeconds = (J_BAD / 1000) * rate; // Scale window to Song Time
 
-    if (e.type !== 'keydown') return;
+        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+            const n = gameState.activeNotes[i];
+            if (n.processed) continue;
+            if (n.holdState === 'active') continue;
 
-    // Find Hittable Note
-    let hittableNote = null;
-    const windowSeconds = (J_BAD / 1000) * rate; // Scale window to Song Time
+            // Song Time Diff
+            const diff = n.time - currentTime;
 
-    for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
-        const n = gameState.activeNotes[i];
-        if (n.processed) continue;
-        if (n.holdState === 'active') continue;
+            if (diff > 2.0) break;
+            if (diff < -2.0) continue;
 
-        // Song Time Diff
-        const diff = n.time - currentTime;
+            if (diff < -windowSeconds) continue; // Too old (Late)
+            if (diff > windowSeconds) break; // Too far (Early)
 
-        // CRITICAL FIX: Ghost Judgements in Empty Space
-        // Prevent matching notes that are unreasonable far.
-        // Hard cap at 2.0s (Song Time) to strictly prevent cross-mapping distant notes
-        // while allowing large windows at high rates (e.g. 3x rate = 0.54s window).
-        if (diff > 2.0) break;
-        if (diff < -2.0) continue;
-
-        // Too old? (Late)
-        if (diff < -windowSeconds) continue;
-
-        // Too far in future? (Early)
-        if (diff > windowSeconds) break;
-
-        if (n.col === colIndex && n.type !== 'mine') {
-            hittableNote = n;
-            break;
+            if (n.col === colIndex && n.type !== 'mine') {
+                hittableNote = n;
+                break;
+            }
         }
-    }
 
-    if (hittableNote) {
-        hittableNote.hit = true;
-        // Convert Song Time Diff to Real Time MS for Judgment
-        const diffMs = (hittableNote.time - currentTime) * 1000 / rate;
-        triggerJudgement(hittableNote, diffMs, false);
+        if (hittableNote) {
+            hittableNote.hit = true;
+            // Convert Song Time Diff to Real Time MS for Judgment
+            const diffMs = (hittableNote.time - currentTime) * 1000 / rate;
+            triggerJudgement(hittableNote, diffMs, false);
+        }
+
+    } else {
+        // type === 'up'
+        gameState.heldKeys[colIndex] = false;
     }
-} window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
+}
 
 // ** INITIALIZE GAME STATE **
 function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
@@ -4258,10 +4615,15 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         peakNPS: 0,
         bpmTimes: [], // Pre-calculated time-based BPM segments
         isAutoplay: !!window.isAutoplayLaunch, // Set Autoplay State
+        isReplay: !!window.isReplayLaunch,
+        replayLog: window.replayData || [],
+        replayIndex: 0,
         lastFrameTime: performance.now(),
         fpsTimer: 0
     };
     window.isAutoplayLaunch = false; // Reset flag
+    window.isReplayLaunch = false;
+    window.replayData = null;
 
     // TARGET TRACKER INIT
     gameState.targetTrackerPB = 0;
@@ -4387,6 +4749,36 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
             hud.appendChild(fpsEl);
         }
         fpsEl.style.display = 'block';
+    }
+
+    // REPLAY INIT
+    if (gameState.isReplay) {
+        // Inject Replay UI
+        let rUI = document.getElementById('replay-ui-container');
+        if (!rUI) {
+            rUI = document.createElement('div');
+            rUI.id = 'replay-ui-container';
+            rUI.style.position = 'absolute';
+            rUI.style.top = '60px';
+            rUI.style.width = '100%';
+            rUI.style.display = 'flex';
+            rUI.style.flexDirection = 'column';
+            rUI.style.alignItems = 'center';
+            rUI.style.pointerEvents = 'none'; // Don't block clicks generally
+            rUI.innerHTML = `
+                <div style="background:rgba(255,0,0,0.8); color:white; padding:5px 15px; border-radius:4px; font-weight:bold; letter-spacing:2px; margin-bottom:10px; box-shadow:0 0 10px rgba(255,0,0,0.5);">REPLAY</div>
+                <div style="pointer-events:auto; display:flex; gap:10px; background:rgba(0,0,0,0.7); padding:10px; border-radius:8px;">
+                    <button onclick="stepReplay(-1)" style="background:#444; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;" title="Hold to Seek (Paused)">⏪</button>
+                    <button id="replay-play-btn" onclick="togglePause()" style="background:#00e5ff; color:black; border:none; padding:5px 15px; border-radius:4px; font-weight:bold; cursor:pointer; min-width:30px;">⏸</button>
+                    <button onclick="stepReplay(1)" style="background:#444; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;" title="Hold to Seek (Paused)">⏩</button>
+                </div>
+            `;
+            document.body.appendChild(rUI);
+        }
+
+        // Update Play Button State
+        const pBtn = document.getElementById('replay-play-btn');
+        if (pBtn) pBtn.innerText = gameState.isPaused ? "▶" : "⏸";
     }
 
     // Autoplay UI
@@ -5241,7 +5633,8 @@ function saveScore(forceFail = false) {
         timestamp: Date.now(),
         judgeDiff: userConfig.judgeDifficulty || 4, // METADATA: Saved usage diff
         rate: (modConfig && modConfig.rate) ? modConfig.rate : 1.0,
-        detailedHits: gameState.detailedHits // Save for future re-calc if needed? (Optional, might be heavy)
+        detailedHits: gameState.detailedHits, // Save for future re-calc if needed
+        replayLog: gameState.replayLog // Save Replay Data
     };
 
     // Save to local storage
@@ -5514,12 +5907,22 @@ function renderFullLeaderboard() {
         const rateVal = (entry.rate || 1.0).toFixed(2);
         const rateHtml = `<span style="font-size:0.8rem; color:#aaa; margin-left:8px; border:1px solid #444; padding:1px 4px; border-radius:3px;">${rateVal}x</span>`;
 
+        // Buttons
+        const hasReplay = entry.replayLog && entry.replayLog.length > 0;
+        const btnStyle = "background:#333; color:#fff; border:1px solid #555; padding:2px 6px; border-radius:3px; cursor:pointer; font-size:0.7em; margin-left:5px;";
+        const resBtn = `<button onclick='viewScoreResults(${JSON.stringify(entry)})' style='${btnStyle}'>📄 Results</button>`;
+        const repBtn = hasReplay ? `<button onclick='startReplay(${JSON.stringify(entry)}, songLibrary[${selectedSongIndex}], songLibrary[${selectedSongIndex}].charts[${selectedChartIndex}])' style='${btnStyle} color:#00e5ff; border-color:#00e5ff;'>▶ Replay</button>` : "";
+
         div.innerHTML = `
             <div class="ss-lb-main-row">
                 <span class="ss-lb-rank">#${i + 1}</span>
                 <div style="display:flex; align-items:baseline; gap:10px;">
                     <span style="font-size:0.9rem; color:#ffd700; font-family:'Mochiy Pop One'; text-shadow:0 0 5px rgba(255, 215, 0, 0.5);">${ssrVal}</span>
                     <span class="ss-lb-score">${displayScore}</span>
+                </div>
+                <div style="display:flex; align-items:center; margin-left:auto;">
+                    ${resBtn}
+                    ${repBtn}
                 </div>
             </div>
             <div class="ss-lb-details-row">
@@ -6060,9 +6463,8 @@ function switchSettingsTab(tabName) {
     const targetEl = document.getElementById('set-tab-' + tabName);
     if (targetEl) {
         targetEl.style.display = 'block';
-        // If content is flex/grid, we might need to restore that?
-        // But mod-section-content usually block.
     }
+    const targetBtn = document.getElementById('set-tab-btn-' + tabName);
     if (targetBtn) targetBtn.classList.add('active');
 }
 
@@ -6081,35 +6483,126 @@ function startKeyBind(target) {
 
 // --- Data Management ---
 function wipeSongDatabase() {
-    if (confirm("ARE YOU SURE?\n\nThis will PERMANENTLY DELETE all imported songs and scores.\nThis action cannot be undone.")) {
+    if (confirm("Are you sure you want to clear the Song Cache?\n\nThis will remove loaded songs from memory/storage.\nYour SCORES will be preserved.\n\nYou will need to re-import your songs.")) {
         // Clear Memory
         if (typeof songLibrary !== 'undefined') songLibrary = [];
 
         // Clear Storage
         try {
-            // We need to identify keys. Usually 'sm_songLibrary' or similar.
-            // Let's clear keys starting with specific prefix or just wipe known ones.
-            // Assuming default keys based on loadLibrary:
+            // Only remove the library cache
             localStorage.removeItem('sm_songLibrary');
-            // Scores? 'sm_scores_HASH'? 
-            // If scores are stored per chart hash, we might need to clear all or just iterate.
-            // A simple approach is to clear everything if this is a dedicated app, 
-            // but we should respect userConfig.
+            localStorage.removeItem('webSM_library_meta');
 
-            // Iterate and remove keys starting with 'sm_scores_'
-            const keysToRemove = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key && (key.startsWith('sm_scores_') || key === 'sm_songLibrary')) {
-                    keysToRemove.push(key);
-                }
-            }
-            keysToRemove.forEach(k => localStorage.removeItem(k));
+            // Legacy cleanup? (Optional, but user asked to NOT delete scores)
+            // We explicitly do NOT touch 'webSM_lb_' or 'sm_scores_' keys.
 
-            alert("Database Wiped. reloading...");
+            alert("Song Cache Cleared.\nScores were preserved.\nReloading...");
             location.reload();
         } catch (e) {
             alert("Error wiping data: " + e);
         }
+    }
+}
+
+// --- Sync Utilities ---
+function calculateSD(data) {
+    if (!data || data.length === 0) return 0;
+    const mean = data.reduce((a, b) => a + b, 0) / data.length;
+    const sqDiffs = data.map(v => Math.pow(v - mean, 2));
+    const avgSqDiff = sqDiffs.reduce((a, b) => a + b, 0) / sqDiffs.length;
+    return Math.sqrt(avgSqDiff);
+}
+
+function adjustGlobalOffset(delta) {
+    if (typeof userConfig.globalOffset === 'undefined') userConfig.globalOffset = 0;
+    userConfig.globalOffset += delta;
+    console.log(`Global Offset Adjusted: ${delta.toFixed(2)}ms -> New Total: ${userConfig.globalOffset.toFixed(2)}ms`);
+
+    // Update Settings UI if present
+    const display = document.getElementById('val-global-offset');
+    if (display) display.innerText = userConfig.globalOffset.toFixed(0) + "ms";
+
+    saveUserConfig();
+}
+
+function updateSyncStats() {
+    let overlay = document.getElementById('sync-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'sync-overlay';
+        overlay.style.position = 'absolute';
+        // Move to Right Side
+        overlay.style.top = '50%';
+        overlay.style.right = '50px';
+        overlay.style.left = 'auto';
+        overlay.style.transform = 'translateY(-50%)';
+        overlay.style.background = 'rgba(0, 0, 0, 0.8)';
+        overlay.style.padding = '20px';
+        overlay.style.borderRadius = '10px';
+        overlay.style.border = '2px solid #00e5ff';
+        overlay.style.textAlign = 'center';
+        overlay.style.fontFamily = "'Mochiy Pop One', sans-serif";
+        overlay.style.zIndex = '10000'; // Above canvas
+        overlay.style.minWidth = '200px';
+        overlay.style.pointerEvents = 'none'; // Allow clicks to pass through
+        overlay.innerHTML = `
+            <h2 style="color:#00e5ff; margin:0 0 10px 0;">Sync Calibration</h2>
+            <div id="sync-stats-content" style="color:#fff;">Collecting samples...</div>
+            <div style="margin-top:10px; font-size:0.8rem; color:#aaa;">Press ESC to Finish & Apply</div>
+        `;
+        // Append to game-hud instead of body for proper layering
+        const gameHud = document.getElementById('game-hud');
+        if (gameHud) {
+            gameHud.appendChild(overlay);
+        } else {
+            document.body.appendChild(overlay);
+        }
+    }
+    overlay.style.display = 'block';
+
+    const content = document.getElementById('sync-stats-content');
+    if (content) {
+        const batchSize = 24;
+        const currentBatchCount = (window.syncBatch || []).length;
+        const validBatchCount = (window.validBatches || []).length;
+        const totalBatches = (window.syncHistory || []).length;
+
+        let recommendedOffset = 0;
+        if (validBatchCount > 0) {
+            recommendedOffset = window.validBatches.reduce((a, b) => a + b, 0) / validBatchCount;
+        }
+
+        let historyHtml = "";
+        if (totalBatches > 0) {
+            const last = window.syncHistory[window.syncHistory.length - 1];
+            historyHtml = `
+                <div style="margin-top:10px; padding-top:10px; border-top:1px solid #444;">
+                    <div style="font-size:0.85rem; color:#aaa;">Last Batch:</div>
+                    <div style="color:${last.valid ? '#4f4' : '#f44'}; font-size:1rem;">
+                        ${last.valid ? 'VALID' : 'INVALID (High SD)'}
+                    </div>
+                    <div style="font-size:0.8rem; color:#888;">SD: ${last.sd.toFixed(2)}ms</div>
+                </div>
+            `;
+        }
+
+        content.innerHTML = `
+            <div style="font-size:3.5rem; font-weight:bold; color:#fff; margin-bottom:10px;">
+                ${window.lastHitOffset !== null ? (window.lastHitOffset > 0 ? '+' : '') + window.lastHitOffset.toFixed(2) : '--'}
+            </div>
+            <div style="font-size:1.1rem; margin-bottom:10px;">
+                Batch Progress: <span style="color:#00e5ff;">${currentBatchCount}/${batchSize}</span>
+            </div>
+            <div style="font-size:1.1rem; margin-bottom:15px;">
+                Valid Batches: <span style="color:#4f4;">${validBatchCount}</span> / ${totalBatches}
+            </div>
+            
+            <div style="margin:10px 0; padding:15px; background:rgba(0,229,255,0.1); border-radius:5px; border:1px solid #00e5ff;">
+                <div style="font-size:0.9rem; color:#00e5ff; text-transform:uppercase; letter-spacing:1px;">Recommended Offset</div>
+                <div style="font-size:1.8rem; font-weight:bold; color:#fff;">${recommendedOffset.toFixed(1)}ms</div>
+            </div>
+
+            ${historyHtml}
+        `;
     }
 }
