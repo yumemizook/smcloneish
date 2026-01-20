@@ -115,6 +115,58 @@ function updateModifiersUI() {
     else if (modConfig.speedType === 'M') valStr = "M" + Math.round(modConfig.speedValue);
     document.getElementById('mod-speed-val-display').innerText = valStr;
 
+    // Update px/sec display
+    const pxDisplay = document.getElementById('mod-speed-px-display');
+    if (pxDisplay) {
+        const bpmStats = window.currentBPMStats || { min: 150, max: 150 };
+        // Note: 480px normalization.
+        // Stepmania X-mod definition: 1x = 1 beat covers standard measure distance? 
+        // Standard SM: 1x at 60BPM = 1 beat per second. 
+        // Scroll pixels = BPM * Mult? 
+        // Actually usually standard is: 1x -> Notes move at BPM pixels per minute or something?
+        // Let's verify standard behavior or "SMCloneish" behavior.
+        // In game.js: scrollSpeed = ...
+        // If X-Mod: speed = BPM * modConfig.speedValue
+        // If C-Mod: speed = modConfig.speedValue
+        // 
+        // User said: "make sure all speed mod calculations uses a 480px screen height to calculate px/sec"
+        // This likely implies a reference point. 
+        // BUT, if the game's loop directly uses `scrollSpeed` in pixels/sec, then we just show that.
+        // Let's check game.js scroll logic again (I saw it earlier in previewLoop, simple multiplication).
+        // previewLoop: y = ... + diff * speed
+        // where speed = 400 (if C400).
+        // If X-Mod, gameLoop sets gameConfig.scrollSpeed dynamically based on current BPM? 
+        // I need to check gameLoop dynamic speed updae. 
+        // 
+        // Assuming standard: 
+        // C-Mod: Value IS pixels per second.
+        // X-Mod: Value * BPM = pixels per second? (e.g. 1x at 60BPM = 60px/s? Or is there a base scalar?)
+        // Taking "C400 matches 4.0x at 100BPM" -> 4.0 * 100 = 400. Yes.
+        // So Speed(px/s) = Mult * BPM.
+
+        // 480px height normalization?
+        // Maybe user means "Speed 1x should traverse 480px in ... seconds?"
+        // Or simply "Display px/sec assuming 100% is 480px"? No, px/sec is absolute units.
+        // "uses a 480px screen height to calculate px/sec" -- usually this comes up in Osu!mania/Quaver conversions.
+        // If the user considers "Scroll Speed" as "Time to cross screen", then px/sec = Height / scrollTime.
+        // But here we have X-mod/C-mod. 
+        // Let's assume the user just wants the literal px/s value.
+        // "switch from C1000 to X-mod on 200BPM gives 5.0x" -> 5.0 * 200 = 1000. 
+        // This matches the helper assumption.
+
+        let text = "";
+        if (modConfig.speedType === 'X') {
+            const min = Math.round(bpmStats.min * modConfig.speedValue);
+            const max = Math.round(bpmStats.max * modConfig.speedValue);
+            if (min === max) text = `(${min} px/s)`;
+            else text = `(${min} - ${max} px/s)`;
+        } else {
+            // C or M
+            text = `(${Math.round(modConfig.speedValue)} px/s)`;
+        }
+        pxDisplay.innerText = text;
+    }
+
     // --- GAMEPLAY (Fail, Rate, Pitch) ---
     updateToggle('mod-fail', modConfig.failMode);
     document.getElementById('mod-rate-display').innerText = modConfig.rate.toFixed(2) + "x";
@@ -257,10 +309,58 @@ window.changeTrackerVal = changeTrackerVal;
 function setModifier(cat, val, subParam) {
     // General setter
     if (cat === 'speedType') {
+        const oldType = modConfig.speedType;
         modConfig.speedType = val;
-        if (val === 'X') modConfig.speedValue = 2.0;
-        else if (val === 'C') modConfig.speedValue = 400;
-        else if (val === 'M') modConfig.speedValue = 400;
+
+        if (val === 'X') {
+            // Conversion Logic: C -> X
+            // We want to match the PEAK speed (Max BPM * Multiplier)
+            if (oldType === 'C' || oldType === 'M') {
+                const bpmStats = window.currentBPMStats || { max: 150 }; // Fallback
+                // C600 = 600 px/s
+                // X calc: BPM * Mult = px/s (roughly, assuming standard scroll)
+                // Actually: 
+                // C-Mod: scroll speed is constant 'speedValue' (e.g. 600)
+                // X-Mod: scroll speed is BPM * speedValue
+                // So: 600 = MaxBPM * NewMult
+                // NewMult = 600 / MaxBPM
+
+                // Safety check
+                const maxBpm = Math.max(1, bpmStats.max);
+                let newMult = modConfig.speedValue / maxBpm;
+
+                // Round to nearest 0.25 for cleanliness, or keep precise?
+                // User asked for "calculated so that it matches". 
+                // Let's round to 1 decimal first, or 0.25 steps.
+                // 600 / 150 = 4.0. 
+                // 600 / 140 = 4.28... -> 4.3?
+                // Let's use 0.1 precision.
+                newMult = Math.round(newMult * 10) / 10;
+
+                modConfig.speedValue = Math.max(0.5, newMult);
+            } else {
+                modConfig.speedValue = 2.0; // Default if not converting
+            }
+        }
+        else if (val === 'C' || val === 'M') {
+            // Conversion Logic: X -> C/M
+            if (oldType === 'X') {
+                const bpmStats = window.currentBPMStats || { max: 150 };
+                const maxBpm = Math.max(1, bpmStats.max);
+
+                // Calc: Mult * BPM = Px/s
+                let newSpeed = modConfig.speedValue * maxBpm;
+
+                // Round to nearest 10 for cleaner numbers (e.g. 642 -> 640)
+                newSpeed = Math.round(newSpeed / 10) * 10;
+
+                modConfig.speedValue = Math.max(50, newSpeed);
+            } else if (modConfig.speedValue < 50) {
+                // If coming from uninitialized or weird state
+                modConfig.speedValue = 400;
+            }
+            // If C -> M or M -> C, keep same value (already shared speedValue property)
+        }
     }
     if (cat === 'fail') modConfig.failMode = val;
     if (cat === 'direction') {

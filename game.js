@@ -12,7 +12,12 @@ let userConfig = {
     keyPause: 'Escape',
     keyRetry: 'Backquote',
     keyRateUp: '=',
-    keyRateDown: '-'
+    keyRateDown: '-',
+    keyRateUp: '=',
+    keyRateDown: '-',
+    audioOffset: 0,
+    audioOffsetA: 0,
+    audioOffsetB: 0
 };
 // Expose to window for modifiers.js access assurance
 window.userConfig = userConfig;
@@ -542,7 +547,13 @@ function applyChartTransforms(originalNotes) {
    UI HELPERS
    ========================================= */
 function setScreen(screenName) {
-    const screens = ['setup-panel', 'game-hud', 'pause-menu', 'results-screen', 'settings-modal', 'settings-screen', 'loading-status'];
+    if (screenName === 'loading-status') {
+        const el = document.getElementById('loading-status');
+        if (el) el.style.display = 'flex';
+        return;
+    }
+
+    const screens = ['setup-panel', 'game-hud', 'pause-menu', 'results-screen', 'settings-modal', 'settings-screen'];
     screens.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
@@ -1084,6 +1095,10 @@ function updateBannerStats(chart) {
             const val = b.value;
             if (val < minBPM) minBPM = val;
             if (val > maxBPM) maxBPM = val;
+
+
+            // Expose BPM Stats for Modifiers
+            window.currentBPMStats = { min: minBPM, max: maxBPM, main: mainBPM };
 
             // Duration in beats
             let startBeat = b.beat;
@@ -1676,6 +1691,11 @@ async function startGameFromMenu() {
 
     if (song.audioBlob) {
         document.getElementById('loading-status').style.display = 'flex';
+        setText('loading-text', "Loading Chart...");
+        // Allow UI to paint
+        await new Promise(r => requestAnimationFrame(r));
+        await new Promise(r => setTimeout(r, 50));
+
         try {
             const ab = await song.audioBlob.arrayBuffer();
             const decoded = await audioCtx.decodeAudioData(ab);
@@ -2797,6 +2817,26 @@ function drawNote(note, y, rotation) {
     let drawY = y;
     let alpha = 1.0;
 
+    // CALIBRATION MODE: Fade notes after initial hits
+    if (gameState.isCalibrationMode) {
+        const hitCount = gameState.calibrationHits.length;
+        const fadeAfter = gameState.calibrationFadeAfter;
+
+        if (hitCount > fadeAfter) {
+            // Fade based on distance from receptor
+            const dist = Math.abs(y - gameConfig.receptorY);
+            const fadeStart = 50; // Start fading 50px from receptor
+            const fadeEnd = 200; // Fully invisible 200px away
+
+            if (dist > fadeStart) {
+                const fadeDist = fadeEnd - fadeStart;
+                const currentDist = Math.min(dist - fadeStart, fadeDist);
+                alpha = 1.0 - (currentDist / fadeDist);
+                alpha = Math.max(0, alpha); // Clamp to 0
+            }
+        }
+    }
+
     // 1. Appearance (Hidden/Sudden/Stealth)
     if (modConfig.appearance) {
         const type = modConfig.appearance.type;
@@ -2817,7 +2857,7 @@ function drawNote(note, y, rotation) {
             // Fade start: offsetVal * screenH. Fade End: Receptor.
             const fadePoint = offsetVal * (screenH * 0.5) + 50; // Scaling
             if (dist < fadePoint) {
-                alpha = dist / fadePoint;
+                alpha *= dist / fadePoint; // Multiply with existing alpha
             }
         } else if (type === 'sudden') {
             // Invisible at distance, fade in near receptor.
@@ -2825,7 +2865,7 @@ function drawNote(note, y, rotation) {
             if (dist > fadePoint) alpha = 0;
             else {
                 // Fade in: dist 0 = alpha 1. dist fadePoint = alpha 0.
-                alpha = 1 - (dist / fadePoint);
+                alpha *= (1 - (dist / fadePoint)); // Multiply with existing alpha
             }
         }
     }
@@ -3118,6 +3158,12 @@ function gameLoop() {
             else if (fps < 55) fpsEl.style.color = '#ffcc00';
             else fpsEl.style.color = 'rgba(255, 255, 255, 0.5)';
         }
+
+        // Calibration HUD Update
+        if (gameState.isCalibrationMode) {
+            updateCalibrationHUD();
+        }
+
         gameState.fpsTimer = 0;
     }
 
@@ -3139,6 +3185,13 @@ function gameLoop() {
         // Vinyl Mode
         currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
     }
+
+    // Apply Global Audio Offset
+    // If offset is positive (Audio Lag), we want GameTime to be BEHIND system time,
+    // so notes appear "later" to match the delayed audio.
+    // Offset is in ms.
+    const offsetSec = (userConfig.audioOffset || 0) / 1000;
+    currentTime -= offsetSec;
 
     // Speed is handled by updateScrollSpeed() called on init and rate change.
     // Removed inline override that was causing rate scaling issues.
@@ -3401,6 +3454,10 @@ function gameLoop() {
                 gameState.heldKeys[note.col] = true; // Visual feedback
                 triggerJudgement(note, 0, false);
 
+                // Track hit for calibration mode
+                if (gameState.isCalibrationMode) {
+                    gameState.calibrationHits.push(0);
+                }
                 // For Holds/Rolls
                 if (note.type === 'hold' || note.type === 'roll') {
                     note.holdState = 'active';
@@ -3577,6 +3634,12 @@ function openSettings() {
     if (!userConfig.judgeDifficulty) userConfig.judgeDifficulty = 4;
     if (!userConfig.lifeDifficulty) userConfig.lifeDifficulty = 4;
 
+    // Init Audio Offset Input
+    const offsetInput = document.getElementById('set-audio-offset');
+    if (offsetInput) {
+        offsetInput.value = userConfig.audioOffset || 0;
+    }
+
     updateSettingsPreview();
 
     // Start Key Test Listener
@@ -3586,7 +3649,7 @@ function openSettings() {
             // Visual Feedback for Columns
             const colIndex = userConfig.keys.indexOf(e.key.toLowerCase());
             if (colIndex !== -1) {
-                const el = document.getElementById(`test - col - ${colIndex} `);
+                const el = document.getElementById(`test-col-${colIndex}`);
                 if (el) {
                     if (e.type === 'keydown') el.classList.add('active');
                     else el.classList.remove('active');
@@ -3683,9 +3746,244 @@ function updateSettingsPreview() {
 }
 window.updateSettingsPreview = updateSettingsPreview;
 
+function updateAudioOffset(val) {
+    userConfig.audioOffset = parseInt(val) || 0;
+    saveUserConfig();
+}
+window.updateAudioOffset = updateAudioOffset;
+
+function adjustOffset(amount) {
+    let current = userConfig.audioOffset || 0;
+    current += amount;
+    userConfig.audioOffset = current;
+
+    // Update Input
+    const input = document.getElementById('set-audio-offset');
+    if (input) input.value = current;
+
+    saveUserConfig();
+}
+window.adjustOffset = adjustOffset;
+
+function saveOffsetPreset(slot) {
+    const key = `audioOffset${slot}`;
+    userConfig[key] = userConfig.audioOffset || 0;
+    saveUserConfig();
+    const btn = event.target;
+    const ogText = btn.innerText;
+    btn.innerText = "Saved!";
+    setTimeout(() => btn.innerText = ogText, 1000);
+}
+window.saveOffsetPreset = saveOffsetPreset;
+
+function loadOffsetPreset(slot) {
+    const key = `audioOffset${slot}`;
+    const val = userConfig[key] || 0;
+    userConfig.audioOffset = val;
+    saveUserConfig();
+
+    const input = document.getElementById('set-audio-offset');
+    if (input) input.value = val;
+}
+window.loadOffsetPreset = loadOffsetPreset;
+
+async function loadSyncChart() {
+    closeModifiers();
+    const modal = document.getElementById('settings-modal');
+    if (modal) modal.style.display = 'none';
+
+    // Search for sync song in library
+    const syncIdx = songLibrary.findIndex(s =>
+        s.meta.title.toLowerCase().includes('sync') ||
+        s.meta.title.toLowerCase().includes('ideal')
+    );
+
+    if (syncIdx === -1) {
+        alert('Sync calibration chart not found. Please import a song with "Sync" or "Ideal" in the title.');
+        return;
+    }
+
+    // Select the sync song
+    selectSong(syncIdx);
+
+    // Wait a bit for song to load
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Start calibration mode
+    if (selectedChartIndex === -1 && songLibrary[syncIdx].charts.length > 0) {
+        selectedChartIndex = 0;
+    }
+
+    startCalibrationMode();
+}
+window.loadSyncChart = loadSyncChart;
+
+// State backup for calibration
+let preCalibConfig = null;
+
+function startCalibrationMode() {
+    // 1. Save Config State
+    preCalibConfig = {
+        speedType: modConfig.speedType,
+        speedValue: modConfig.speedValue,
+        downScroll: userConfig.downScroll,
+        judgments: userConfig.judgments, // Assuming fail type is here or gameConfig?
+        // Check "Fail Off". Usually in `userConfig.failType`?
+        // Let's assume standard fail type is stored in `userConfig`.
+        // If not, we might need to look at `gameState.life` logic. 
+        // Standard SM usually has Fail modes.
+        // For this task, we assume "Fail Off" means preventing failure.
+        // We will set a flag `gameState.cannotFail = true`.
+    };
+
+    // 2. Apply Overrides
+    // Force C400
+    modConfig.speedType = 'C';
+    modConfig.speedValue = 400;
+
+    // Force Upscroll
+    userConfig.downScroll = false;
+
+    // 3. Init Game State Flags
+    if (!window.gameState) window.gameState = {};
+    window.gameState.isCalibrationMode = true;
+    window.gameState.calibrationHits = [];
+    window.gameState.calibrationFadeAfter = 20;
+    window.gameState.cannotFail = true;
+
+    // 4. UI Setup
+    document.getElementById('calibration-hud').style.display = 'block';
+
+    // Hide Standard HUD Elements
+    const standardHudIds = ['hud-score', 'combo', 'hud-life-bar', 'hud-life-text'];
+    standardHudIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.visibility = 'hidden';
+    });
+
+    // Start the game normally
+    startGameFromMenu();
+    updateCalibrationHUD();
+}
+
+function updateCalibrationHUD() {
+    if (!gameState.isCalibrationMode) return;
+
+    const hits = gameState.calibrationHits;
+    const n = hits.length;
+    let mean = 0;
+    let stdDev = 0;
+
+    if (n > 0) {
+        mean = hits.reduce((a, b) => a + b, 0) / n;
+        const variance = hits.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+        stdDev = Math.sqrt(variance);
+    }
+
+    setText('calib-val-n', n);
+    setText('calib-val-mean', (mean > 0 ? "+" : "") + mean.toFixed(2) + "ms");
+    setText('calib-val-sd', stdDev.toFixed(2) + "ms");
+    setText('calib-val-current', userConfig.audioOffset || 0);
+}
+
+function quitCalibration(save) {
+    // Restore Settings
+    if (preCalibConfig) {
+        modConfig.speedType = preCalibConfig.speedType;
+        modConfig.speedValue = preCalibConfig.speedValue;
+        userConfig.downScroll = preCalibConfig.downScroll;
+        preCalibConfig = null;
+    }
+
+    // Hide Calib HUD / Show Standard
+    document.getElementById('calibration-hud').style.display = 'none';
+    document.getElementById('calib-results-modal').style.display = 'none';
+
+    // Restore Visibility of Standard HUD Elements
+    const standardHudIds = ['hud-score', 'combo', 'hud-life-bar', 'hud-life-text'];
+    standardHudIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.visibility = 'visible';
+            // Combo is usually hidden until hit, but visibility property handles layout.
+            // Resetting to visible might show empty combo box?
+            // `initGame` usually hides combo.
+            // So we just need to ensure the container isn't permanently hidden.
+            if (id === 'combo') el.style.visibility = 'hidden';
+        }
+    });
+
+    if (save && window.pendingCalibrationOffset !== undefined) {
+        userConfig.audioOffset = window.pendingCalibrationOffset;
+        saveUserConfig();
+        const input = document.getElementById('set-audio-offset');
+        if (input) input.value = userConfig.audioOffset;
+    }
+
+    gameState.isCalibrationMode = false;
+    quitGame();
+}
+
+function showCalibrationResults() {
+    // Stop audio
+    if (gameState.mode === 'stretch' && gameState.audioEl) {
+        gameState.audioEl.pause();
+    } else if (audioSource) {
+        try { audioSource.stop(); } catch (e) { }
+    }
+
+    gameState.isPlaying = false;
+    gameState.isPaused = true;
+
+    const hits = gameState.calibrationHits;
+
+    if (hits.length === 0) {
+        alert('No hits recorded. Play at least a few notes before checking calibration.');
+        quitCalibration(false);
+        return;
+    }
+
+    // Calculate statistics
+    const mean = hits.reduce((a, b) => a + b, 0) / hits.length;
+    const variance = hits.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / hits.length;
+    const stdDev = Math.sqrt(variance);
+    const suggestedOffset = Math.round((userConfig.audioOffset || 0) + mean);
+
+    window.pendingCalibrationOffset = suggestedOffset;
+
+    // Update Modal
+    setText('res-calib-n', hits.length);
+    setText('res-calib-mean', mean.toFixed(2) + "ms");
+    setText('res-calib-sd', stdDev.toFixed(2) + "ms");
+    setText('res-calib-current', userConfig.audioOffset || 0);
+    setText('res-calib-suggested', suggestedOffset);
+
+    // Setup Buttons
+    document.getElementById('btn-calib-save').onclick = () => quitCalibration(true);
+    document.getElementById('btn-calib-discard').onclick = () => quitCalibration(false);
+
+    document.getElementById('btn-calib-continue').onclick = () => {
+        document.getElementById('calib-results-modal').style.display = 'none';
+        if (gameState.failed) {
+            retryCurrentChart();
+        } else {
+            // Resume logic difficult if stopped. Better to restart loop.
+            retryCurrentChart();
+        }
+    };
+
+    // Show Modal
+    document.getElementById('calib-results-modal').style.display = 'flex';
+}
 
 function togglePause() {
     if (!gameState.isPlaying || gameState.failed) return;
+
+    // Calibration mode: Escape key shows results
+    if (gameState.isCalibrationMode) {
+        showCalibrationResults();
+        return;
+    }
 
     // Prevent pause during countdown (negative time)
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
@@ -4051,11 +4349,21 @@ function handleInput(e) {
         // Convert Song Time Diff to Real Time MS for Judgment
         const diffMs = (hittableNote.time - currentTime) * 1000 / rate;
         triggerJudgement(hittableNote, diffMs, false);
+
+        // Track hit for calibration mode
+        if (gameState.isCalibrationMode) {
+            gameState.calibrationHits.push(diffMs);
+        }
     }
 } window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
 
 // ** INITIALIZE GAME STATE **
 function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
+    // Preserve calibration mode if it was set
+    const wasCalibrationMode = gameState && gameState.isCalibrationMode;
+    const calibrationHits = gameState && gameState.calibrationHits || [];
+    const calibrationFadeAfter = gameState && gameState.calibrationFadeAfter || 20;
+
     gameState = {
         audioUrl: audioUrl, // Store URL
         score: 0,
@@ -4094,7 +4402,11 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         bpmTimes: [], // Pre-calculated time-based BPM segments
         isAutoplay: !!window.isAutoplayLaunch, // Set Autoplay State
         lastFrameTime: performance.now(),
-        fpsTimer: 0
+        fpsTimer: 0,
+        // Calibration mode flags
+        isCalibrationMode: wasCalibrationMode,
+        calibrationHits: calibrationHits,
+        calibrationFadeAfter: calibrationFadeAfter
     };
     window.isAutoplayLaunch = false; // Reset flag
 
@@ -4292,7 +4604,14 @@ function startEngine() {
         audioSource.playbackRate.value = rate;
         audioSource.onended = () => {
             if (gameState.isPlaying && !gameState.isPaused && !gameState.failed) {
-                // Determine finish
+                // Calibration mode: loop the song
+                if (gameState.isCalibrationMode) {
+                    // Restart the song
+                    retryCurrentChart();
+                } else {
+                    // Normal mode: show results
+                    // Determine finish
+                }
             }
         };
         audioSource.connect(audioCtx.destination);
@@ -4372,7 +4691,7 @@ fileInput.addEventListener('change', async (e) => {
     if (defFiles.length === 0) { alert("No .sm or .ssc files found."); return; }
 
     setScreen('loading-status');
-    statusDiv.style.display = 'block';
+    statusDiv.style.display = 'flex';
 
     let loadedCount = 0;
     let selectedSongIndex = -1;
@@ -4394,10 +4713,14 @@ fileInput.addEventListener('change', async (e) => {
         for (let i = 0; i < groupKeys.length; i++) {
             const rootPath = groupKeys[i];
             const groupDefs = songGroups[rootPath];
-            setText('loading-text', `Importing Songs(${i + 1}/${groupKeys.length})`);
+            const folderName = rootPath.split('/').pop() || "Root";
+            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length}): ${folderName}`);
 
             let combinedMeta = null;
             let combinedCharts = [];
+
+            // Allow UI update between groups
+            await new Promise(r => requestAnimationFrame(r));
 
             // Should usually be 1 SM and 1 SSC, or just 1 of either.
             // Parse all and merge.
@@ -4418,6 +4741,10 @@ fileInput.addEventListener('change', async (e) => {
                     // If we do, and this is SSC, overwrite (SSC usually preferred).
                     if (!combinedMeta || isSSC) {
                         combinedMeta = parsed.meta;
+                        if (combinedMeta.title) {
+                            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length}): ${combinedMeta.title}`);
+                            await new Promise(r => setTimeout(r, 0)); // Unblock UI
+                        }
                     }
                     if (parsed.charts) {
                         combinedCharts = combinedCharts.concat(parsed.charts);
@@ -4519,7 +4846,8 @@ fileInput.addEventListener('change', async (e) => {
             // === Duplicate Check ===
             const duplicateIndex = songLibrary.findIndex(s =>
                 s.meta.title.toLowerCase() === combinedMeta.title.toLowerCase() &&
-                s.meta.artist.toLowerCase() === combinedMeta.artist.toLowerCase()
+                s.meta.artist.toLowerCase() === combinedMeta.artist.toLowerCase() &&
+                (s.meta.subtitle || "").toLowerCase() === (combinedMeta.subtitle || "").toLowerCase()
             );
 
             if (duplicateIndex !== -1) {
@@ -4534,6 +4862,7 @@ fileInput.addEventListener('change', async (e) => {
         }
 
         if (loadedCount > 0) {
+            sortLibrary();
             saveLibrary();
             if (selectedSongIndex !== -1) selectSong(selectedSongIndex);
             else renderSongList();
@@ -4592,10 +4921,14 @@ async function handleZipImport(e) {
         for (let i = 0; i < groupKeys.length; i++) {
             const rootPath = groupKeys[i];
             const groupDefs = songGroups[rootPath];
-            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length})`);
+            const folderName = rootPath.split('/').pop() || "Root";
+            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length}): ${folderName}`);
 
             let combinedMeta = null;
             let combinedCharts = [];
+
+            // Allow UI update between groups
+            await new Promise(r => requestAnimationFrame(r));
 
             for (const defFile of groupDefs) {
                 const text = await defFile.async("string");
@@ -4612,6 +4945,10 @@ async function handleZipImport(e) {
                 if (parsed) {
                     if (!combinedMeta || isSSC) {
                         combinedMeta = parsed.meta;
+                        if (combinedMeta.title) {
+                            setText('loading-text', `Importing Songs (${i + 1}/${groupKeys.length}): ${combinedMeta.title}`);
+                            await new Promise(r => setTimeout(r, 0)); // Unblock UI
+                        }
                     }
                     if (parsed.charts) {
                         combinedCharts = combinedCharts.concat(parsed.charts);
@@ -4716,7 +5053,8 @@ async function handleZipImport(e) {
 
             const duplicateIndex = songLibrary.findIndex(s =>
                 s.meta.title.toLowerCase() === combinedMeta.title.toLowerCase() &&
-                s.meta.artist.toLowerCase() === combinedMeta.artist.toLowerCase()
+                s.meta.artist.toLowerCase() === combinedMeta.artist.toLowerCase() &&
+                (s.meta.subtitle || "").toLowerCase() === (combinedMeta.subtitle || "").toLowerCase()
             );
 
             if (duplicateIndex !== -1) {
@@ -4734,6 +5072,7 @@ async function handleZipImport(e) {
         }
 
         if (loadedCount > 0) {
+            sortLibrary();
             saveLibrary();
             if (selectedSongIndex !== -1) selectSong(selectedSongIndex);
             else renderSongList();
@@ -4801,7 +5140,7 @@ function updateScrollSpeed(rateOverride) {
         // X-Mod: Multiplier of Current BPM
         // Should scale WITH rate (faster song = faster scroll), so NO division.
         const currentBPM = getCurrentBPM();
-        targetSpeed = currentBPM * val * 2.5 * scaleFactor;
+        targetSpeed = currentBPM * val * scaleFactor;
     } else if (type === 'M') {
         // M-Mod: Max Speed cap
         const mVal = val;
@@ -4827,6 +5166,8 @@ let previewStartTime = 0;
 let previewChartData = null;
 let previewPaused = false;
 let previewAssets = {};
+let previewMouseMoveListener = null;
+let previewMouseLeaveListener = null;
 
 function switchSongTab(tab) {
     currentSongTab = tab;
@@ -5385,6 +5726,76 @@ async function startChartPreview() {
     if (slider) {
         slider.max = len + 2;
         slider.value = 0;
+
+        // Tooltip Listeners & Density Graph
+        const tooltip = document.getElementById('prev-seek-tooltip');
+        const densityCanvas = document.getElementById('density-canvas');
+
+        // Render Density Graph
+        if (densityCanvas) {
+            // Force safe size if offsetWidth is 0 (fallback)
+            if (densityCanvas.offsetWidth === 0) {
+                densityCanvas.style.width = '100%';
+                densityCanvas.style.height = '60px'; // Force height from CSS
+            }
+            try {
+                // Short timeout to ensure layout is computed if tab just switched
+                // AND use requestAnimationFrame for better timing
+                requestAnimationFrame(() => {
+                    renderDensityGraph(chart, densityCanvas, len);
+                });
+            } catch (e) {
+                console.error("Density Graph Render Error:", e);
+            }
+        }
+
+        // Cleanup old listeners if they exist
+        if (previewMouseMoveListener) {
+            slider.removeEventListener('mousemove', previewMouseMoveListener);
+        }
+        if (previewMouseLeaveListener) {
+            slider.removeEventListener('mouseleave', previewMouseLeaveListener);
+        }
+
+        // Define new listeners
+        previewMouseMoveListener = (e) => {
+            // Ensure elements exist
+            if (!tooltip && !densityCanvas) return;
+
+            const rect = slider.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const w = rect.width;
+            if (w <= 0) return; // Paranoia
+
+            const pct = Math.max(0, Math.min(1, x / w));
+
+            // Show Tooltip
+            if (tooltip) {
+                const max = parseFloat(slider.max) || 1;
+                const time = pct * max;
+                const mins = Math.floor(time / 60);
+                const secs = (time % 60).toFixed(2).padStart(5, '0');
+                tooltip.innerText = `${mins}:${secs}`;
+
+                // Clamp Position
+                const pos = x;
+                tooltip.style.left = `${pos + slider.offsetLeft}px`;
+                tooltip.style.display = 'block';
+            }
+
+            // Show Density Graph
+            if (densityCanvas) {
+                densityCanvas.style.opacity = '1';
+            }
+        };
+
+        previewMouseLeaveListener = () => {
+            if (tooltip) tooltip.style.display = 'none';
+            if (densityCanvas) densityCanvas.style.opacity = '0';
+        };
+
+        slider.addEventListener('mousemove', previewMouseMoveListener);
+        slider.addEventListener('mouseleave', previewMouseLeaveListener);
     }
 
     const canvas = document.getElementById('preview-canvas');
@@ -5508,6 +5919,8 @@ function updatePlayBtn(playing) {
 function seekPreview(val) {
     if (previewAudio) {
         previewAudio.currentTime = parseFloat(val);
+        // Force update if paused
+        if (previewPaused) previewLoop();
     }
 }
 
@@ -5537,7 +5950,7 @@ function previewLoop() {
     // Dynamic Receptor Placement
     // userConfig should be available globally
     const isDownScroll = userConfig.downScroll;
-    const receptorY = isDownScroll ? height - 50 : 50;
+    const receptorY = isDownScroll ? height - 50 : 10;
 
     // Note: scrolling UP means earlier notes are at bottom? No, standard upscroll: notes come from bottom, receptor at top.
 
@@ -5738,3 +6151,50 @@ window.addEventListener('keydown', (e) => {
         }
     }
 });
+
+// Note Density Graph
+function renderDensityGraph(chart, canvas, totalTime) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width = canvas.offsetWidth;
+    const h = canvas.height = canvas.offsetHeight;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(0, 0, w, h);
+
+    // Binning
+    const binSize = 0.5; // 0.5 second bins for resolution
+    const bins = Math.ceil(totalTime / binSize);
+    const data = new Array(bins).fill(0);
+
+    chart.notes.forEach(n => {
+        if (n.type !== 'tap' && n.type !== 'hold' && n.type !== 'roll' && n.type !== 'mine') return; // Include mines? Maybe just taps/holds
+        const b = Math.floor(n.time / binSize);
+        if (b >= 0 && b < bins) data[b]++;
+    });
+
+    const maxDensity = Math.max(...data, 1);
+
+    ctx.fillStyle = 'rgba(0, 229, 255, 0.4)';
+    ctx.strokeStyle = '#00e5ff';
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+
+    for (let i = 0; i < bins; i++) {
+        const x = (i / bins) * w;
+        const nextX = ((i + 1) / bins) * w;
+        const val = data[i];
+        const barH = (val / maxDensity) * h;
+        const y = h - barH;
+
+        ctx.lineTo(x, y);
+        ctx.lineTo(nextX, y);
+    }
+
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+}

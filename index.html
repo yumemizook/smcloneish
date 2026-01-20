@@ -148,14 +148,19 @@
                                     </div>
                                     <div class="preview-controls">
                                         <button id="prev-play-toggle" onclick="togglePreviewPlayback()">⏸</button>
-                                        <input type="range" id="prev-seek" min="0" max="100" step="0.1" value="0"
-                                            oninput="seekPreview(this.value)">
+                                        <div
+                                            style="flex: 1; position: relative; height: 100%; display: flex; align-items: center;">
+                                            <canvas id="density-canvas"></canvas>
+                                            <input type="range" id="prev-seek" min="0" max="100" step="0.1" value="0"
+                                                oninput="seekPreview(this.value)" style="width: 100%;">
+                                            <div id="prev-seek-tooltip" style="display:none;">0:00</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
                             <div class="ss-action-row">
-                                <button class="ss-btn-secondary" onclick="openSettings()">⚙ Settings</button>
+
                                 <button id="btn-modifiers" class="ss-btn-secondary" onclick="openModifiers()">🛠️
                                     Modifiers</button>
                                 <button class="ss-btn-secondary" onclick="startAutoplay()">▶ Autoplay</button>
@@ -203,7 +208,11 @@
                             <label>Speed Value</label>
                             <div class="mod-control">
                                 <button onclick="changeSpeedVal(-1)">-</button>
-                                <span id="mod-speed-val-display" class="val-display">C400</span>
+                                <div style="display:flex; flex-direction:column; align-items:center;">
+                                    <span id="mod-speed-val-display" class="val-display">C400</span>
+                                    <span id="mod-speed-px-display"
+                                        style="font-size:0.8rem; color:#888; margin-top:-5px;">(400 px/s)</span>
+                                </div>
                                 <button onclick="changeSpeedVal(1)">+</button>
                             </div>
                         </div>
@@ -376,6 +385,73 @@
                                 </div>
                             </div>
 
+                            <!-- CALIBRATION HUD -->
+                            <div id="calibration-hud"
+                                style="display:none; position:absolute; top:10px; left:50%; transform:translateX(-50%); text-align:center; color:#fff; z-index:100; text-shadow:1px 1px 2px #000;">
+                                <h2 style="margin:0; font-size:1.2rem; color:#aaa;">CALIBRATION MODE</h2>
+                                <div style="display:flex; gap:20px; justify-content:center; margin-top:5px;">
+                                    <div>
+                                        <div style="font-size:0.8rem; color:#888;">HITS</div>
+                                        <div id="calib-val-n" style="font-size:1.2rem; font-weight:bold;">0</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size:0.8rem; color:#888;">OFFSET ERROR</div>
+                                        <div id="calib-val-mean" style="font-size:1.2rem; font-weight:bold;">0.00ms
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size:0.8rem; color:#888;">STD DEV</div>
+                                        <div id="calib-val-sd" style="font-size:1.2rem; font-weight:bold;">0.00ms</div>
+                                    </div>
+                                </div>
+                                <div style="margin-top:5px; font-size:0.9rem;">
+                                    Current Offset: <span id="calib-val-current">0</span> ms
+                                </div>
+                                <div style="margin-top:2px; font-size:0.7rem; color:#666;">
+                                    Press ESC to finish
+                                </div>
+                            </div>
+
+                            <!-- CALIBRATION RESULTS MODAL -->
+                            <div id="calib-results-modal" class="modal-overlay" style="display:none;">
+                                <div class="modal-content" style="width:400px;">
+                                    <h2>Calibration Complete</h2>
+                                    <div style="margin:20px 0; line-height:1.6;">
+                                        <div class="setting-row">
+                                            <span>Sampled Hits:</span>
+                                            <strong id="res-calib-n">0</strong>
+                                        </div>
+                                        <div class="setting-row">
+                                            <span>Mean Offset Error:</span>
+                                            <strong id="res-calib-mean">0.00ms</strong>
+                                        </div>
+                                        <div class="setting-row">
+                                            <span>Standard Deviation:</span>
+                                            <strong id="res-calib-sd">0.00ms</strong>
+                                        </div>
+                                        <hr style="border-color:#444; margin:10px 0;">
+                                        <div class="setting-row">
+                                            <span>Current Global Offset:</span>
+                                            <strong id="res-calib-current">0</strong> ms
+                                        </div>
+                                        <div class="setting-row">
+                                            <span style="color:#0f0;">Suggested Global Offset:</span>
+                                            <strong id="res-calib-suggested"
+                                                style="color:#0f0; font-size:1.2em;">0</strong> ms
+                                        </div>
+                                    </div>
+
+                                    <div style="display:flex; flex-direction:column; gap:10px;">
+                                        <button class="ss-btn-primary" id="btn-calib-save">Save & Exit</button>
+                                        <button class="ss-btn-secondary" id="btn-calib-continue">Continue
+                                            Calibrating</button>
+                                        <button class="ss-btn-secondary" id="btn-calib-discard"
+                                            style="border-color:#f44; color:#f44;">Discard & Exit</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- SCRIPTS -->
                             <!-- INSERTS -->
                             <div class="mod-col-group">
                                 <label class="section-label">Inserts</label>
@@ -671,6 +747,37 @@
                                 <button id="key-btn-rateDown" class="key-bind-btn wide"
                                     onclick="startKeyBind('rateDown')">Rate -: -</button>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>Audio & Calibration</h3>
+                        <div class="setting-row">
+                            <label>Global Offset (ms)</label>
+                            <div class="num-control">
+                                <button onclick="adjustOffset(-5)">-5</button>
+                                <button onclick="adjustOffset(-1)">-1</button>
+                                <input type="number" id="set-audio-offset" value="0"
+                                    onchange="updateAudioOffset(this.value)" style="width:60px; text-align:center;">
+                                <button onclick="adjustOffset(1)">+1</button>
+                                <button onclick="adjustOffset(5)">+5</button>
+                            </div>
+                        </div>
+                        <div class="setting-row" style="margin-top:5px; justify-content: space-around;">
+                            <div style="display:flex; gap:5px; align-items:center;">
+                                <span style="font-size:0.8rem; color:#aaa;">Preset A:</span>
+                                <button class="mod-toggle-btn mini" onclick="saveOffsetPreset('A')">Save</button>
+                                <button class="mod-toggle-btn mini" onclick="loadOffsetPreset('A')">Load</button>
+                            </div>
+                            <div style="display:flex; gap:5px; align-items:center;">
+                                <span style="font-size:0.8rem; color:#aaa;">Preset B:</span>
+                                <button class="mod-toggle-btn mini" onclick="saveOffsetPreset('B')">Save</button>
+                                <button class="mod-toggle-btn mini" onclick="loadOffsetPreset('B')">Load</button>
+                            </div>
+                        </div>
+                        <div class="setting-row" style="margin-top:10px;">
+                            <button class="ss-btn-secondary" onclick="loadSyncChart()" style="width:100%;">load Sync
+                                Chart for Calibration</button>
                         </div>
                     </div>
                 </div>
