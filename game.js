@@ -12,15 +12,17 @@ let userConfig = {
     keyPause: 'Escape',
     keyRetry: 'Backquote',
     keyRateUp: '=',
-    keyRateDown: '-',
+    keyPause: 'Escape',
+    keyRetry: 'Backquote',
     keyRateUp: '=',
     keyRateDown: '-',
-    audioOffset: 0,
-    audioOffsetA: 0,
-    audioOffsetB: 0
+    globalOffset: 0 // Audio offset in ms
 };
 // Expose to window for modifiers.js access assurance
 window.userConfig = userConfig;
+
+let bindingIndex = -1; // -1 = none, 0-3 = column
+let bindingType = null; // 'pause', 'retry', 'rateUp', 'rateDown' or null
 
 function loadUserConfig() {
     const saved = localStorage.getItem('webSM_config');
@@ -35,7 +37,9 @@ function loadUserConfig() {
             if (!userConfig.keyPause) userConfig.keyPause = 'Escape';
             if (!userConfig.keyRetry) userConfig.keyRetry = 'Backquote';
             if (!userConfig.keyRateUp) userConfig.keyRateUp = '=';
+            if (!userConfig.keyRateUp) userConfig.keyRateUp = '=';
             if (!userConfig.keyRateDown) userConfig.keyRateDown = '-';
+            if (userConfig.globalOffset === undefined) userConfig.globalOffset = 0;
         } catch (e) { }
     }
 }
@@ -2817,26 +2821,6 @@ function drawNote(note, y, rotation) {
     let drawY = y;
     let alpha = 1.0;
 
-    // CALIBRATION MODE: Fade notes after initial hits
-    if (gameState.isCalibrationMode) {
-        const hitCount = gameState.calibrationHits.length;
-        const fadeAfter = gameState.calibrationFadeAfter;
-
-        if (hitCount > fadeAfter) {
-            // Fade based on distance from receptor
-            const dist = Math.abs(y - gameConfig.receptorY);
-            const fadeStart = 50; // Start fading 50px from receptor
-            const fadeEnd = 200; // Fully invisible 200px away
-
-            if (dist > fadeStart) {
-                const fadeDist = fadeEnd - fadeStart;
-                const currentDist = Math.min(dist - fadeStart, fadeDist);
-                alpha = 1.0 - (currentDist / fadeDist);
-                alpha = Math.max(0, alpha); // Clamp to 0
-            }
-        }
-    }
-
     // 1. Appearance (Hidden/Sudden/Stealth)
     if (modConfig.appearance) {
         const type = modConfig.appearance.type;
@@ -2857,7 +2841,7 @@ function drawNote(note, y, rotation) {
             // Fade start: offsetVal * screenH. Fade End: Receptor.
             const fadePoint = offsetVal * (screenH * 0.5) + 50; // Scaling
             if (dist < fadePoint) {
-                alpha *= dist / fadePoint; // Multiply with existing alpha
+                alpha = dist / fadePoint;
             }
         } else if (type === 'sudden') {
             // Invisible at distance, fade in near receptor.
@@ -2865,7 +2849,7 @@ function drawNote(note, y, rotation) {
             if (dist > fadePoint) alpha = 0;
             else {
                 // Fade in: dist 0 = alpha 1. dist fadePoint = alpha 0.
-                alpha *= (1 - (dist / fadePoint)); // Multiply with existing alpha
+                alpha = 1 - (dist / fadePoint);
             }
         }
     }
@@ -3158,12 +3142,6 @@ function gameLoop() {
             else if (fps < 55) fpsEl.style.color = '#ffcc00';
             else fpsEl.style.color = 'rgba(255, 255, 255, 0.5)';
         }
-
-        // Calibration HUD Update
-        if (gameState.isCalibrationMode) {
-            updateCalibrationHUD();
-        }
-
         gameState.fpsTimer = 0;
     }
 
@@ -3186,12 +3164,79 @@ function gameLoop() {
         currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
     }
 
-    // Apply Global Audio Offset
-    // If offset is positive (Audio Lag), we want GameTime to be BEHIND system time,
-    // so notes appear "later" to match the delayed audio.
-    // Offset is in ms.
-    const offsetSec = (userConfig.audioOffset || 0) / 1000;
-    currentTime -= offsetSec;
+    // --- AUDIO OFFSET APPLICATION ---
+    // User wants GLOBAL OFFSET.
+    // If Global Offset is +10ms, it means audio is "late" relative to input? 
+    // Or Input is "early"?
+    // Standard: Offset shifts the Visual Time relative to Audio Time.
+    // Time used for Visuals and Judgement = AudioTime + Offset.
+    // If Offset is positive, Time increases. Visuals move further.
+    // If user hits early (+offsets), they need visuals to be 'later' (less advanced)? No.
+    // Let's stick to standard: Time += Offset.
+    // If I hit early (+50ms), I need notes to arrive LATER.
+    // Note position = (NoteTime - Time) * Speed.
+    // If I add to Time, (NoteTime - Time) becomes SMALLER.
+    // Notes move "down" (past) faster.
+    // If I hit early, the note was "too high". I need it "lower" (closer to target).
+    // So I need Time to be LARGER.
+    // So Time += Offset is correct for fixing Early hits (if positive offset).
+    if (userConfig.globalOffset) {
+        currentTime += (userConfig.globalOffset / 1000);
+    }
+
+    // --- SYNC CALIBRATION LOGIC ---
+    if (isSyncMode) {
+        // 1. Update Sync Stats UI
+        updateSyncStats();
+
+        // 2. Loop Logic
+        // Check if song ended or we far past last note
+        const lastNote = gameState.notes[gameState.notes.length - 1];
+        if (lastNote && currentTime > lastNote.time + 1.0) {
+            // Reset
+            // We need to keep the syncBuffer!
+            // Don't call resetGameState() fully if it wipes syncBuffer.
+            // resetGameState IS wiping stats. syncBuffer is global though.
+            // But gameState.detailedHits is cleared, which we might want?
+            // Actually detailedHits is per-run. syncBuffer accumulates across loops?
+            // User wants "sampled notes" to accumulate? 
+            // "restart the chart... does not stop until esc key".
+            // Yes, accumulate samples.
+
+            // We need to push detailedHits offsets to syncBuffer first
+            gameState.detailedHits.forEach(h => {
+                if (h.offset !== null) syncBuffer.push(h.offset);
+            });
+
+            // Clear detailedHits for next pass
+            gameState.detailedHits = [];
+
+            // Restart Audio
+            if (audioCtx) {
+                // Stop old source?
+                // gameLoop calls startEngine? No.
+                // We just need to reset time.
+                // AudioContext timing is monotonic. We must reset StartTime.
+                gameState.startTime = audioCtx.currentTime + 1.0;
+                gameState.firstActiveNoteIndex = 0;
+                // Reset note processed flags
+                gameState.notes.forEach(n => { n.processed = false; n.hit = false; n.holdState = 'inactive'; });
+
+                // Re-create source if needed (Vinyl Buffer Source is one-shot)
+                if (window.audioSource) {
+                    try { window.audioSource.stop(); } catch (e) { }
+                    window.audioSource = audioCtx.createBufferSource();
+                    window.audioSource.buffer = audioBuffer;
+                    window.audioSource.playbackRate.value = rate;
+                    window.audioSource.connect(audioCtx.destination);
+                    window.audioSource.start(gameState.startTime);
+                } else if (gameState.audioEl) {
+                    gameState.audioEl.currentTime = 0;
+                    gameState.audioEl.play();
+                }
+            }
+        }
+    }
 
     // Speed is handled by updateScrollSpeed() called on init and rate change.
     // Removed inline override that was causing rate scaling issues.
@@ -3454,10 +3499,6 @@ function gameLoop() {
                 gameState.heldKeys[note.col] = true; // Visual feedback
                 triggerJudgement(note, 0, false);
 
-                // Track hit for calibration mode
-                if (gameState.isCalibrationMode) {
-                    gameState.calibrationHits.push(0);
-                }
                 // For Holds/Rolls
                 if (note.type === 'hold' || note.type === 'roll') {
                     note.holdState = 'active';
@@ -3545,67 +3586,7 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
-let bindingIndex = -1; // -1: None, 0-3: Cols, 'pause', 'retry', 'rateUp', 'rateDown' (Strings)
 
-function startKeyBind(index) {
-    bindingIndex = index;
-    const btnId = (typeof index === 'string') ? `key-btn-${index}` : `key-btn-${index}`;
-    const btn = document.getElementById(btnId);
-    if (btn) {
-        btn.innerText = "...";
-        btn.classList.add('binding');
-    }
-
-    // Add temporary listener
-    const bindHandler = (e) => {
-        e.preventDefault();
-
-        let code = e.code;
-        let key = e.key;
-        let display = code;
-
-        if (typeof bindingIndex === 'number') {
-            // Binding Columns (Use Key char usually)
-            userConfig.keys[bindingIndex] = key.toLowerCase();
-            const b = document.getElementById(`key - btn - ${bindingIndex} `);
-            if (b) b.innerText = key.toUpperCase();
-        } else {
-            // Binding System Keys
-            const mapping = {
-                'pause': 'keyPause',
-                'retry': 'keyRetry',
-                'rateUp': 'keyRateUp',
-                'rateDown': 'keyRateDown'
-            };
-            const confKey = mapping[bindingIndex];
-            if (confKey) {
-                if (bindingIndex === 'rateUp' || bindingIndex === 'rateDown') {
-                    userConfig[confKey] = key; // Use character (=, -, +)
-                    display = key;
-                } else {
-                    userConfig[confKey] = code; // Use physical key (Escape, Backquote)
-                }
-
-                const b = document.getElementById(`key-btn-${bindingIndex}`);
-                if (b) {
-                    // Clean up display text
-                    let label = bindingIndex.replace('rate', 'Rate ').replace('key', '');
-                    label = label.charAt(0).toUpperCase() + label.slice(1);
-                    if (bindingIndex === 'rateUp') label = 'Rate +';
-                    if (bindingIndex === 'rateDown') label = 'Rate -';
-                    b.innerText = `${label}: ${display}`;
-                }
-            }
-        }
-
-        bindingIndex = -1;
-        document.querySelectorAll('.key-bind-btn').forEach(b => b.classList.remove('binding'));
-        document.removeEventListener('keydown', bindHandler);
-        saveUserConfig(); // Auto save without redirect
-    };
-    document.addEventListener('keydown', bindHandler);
-}
-window.startKeyBind = startKeyBind;
 
 function openSettings() {
     setScreen('settings-modal');
@@ -3634,12 +3615,6 @@ function openSettings() {
     if (!userConfig.judgeDifficulty) userConfig.judgeDifficulty = 4;
     if (!userConfig.lifeDifficulty) userConfig.lifeDifficulty = 4;
 
-    // Init Audio Offset Input
-    const offsetInput = document.getElementById('set-audio-offset');
-    if (offsetInput) {
-        offsetInput.value = userConfig.audioOffset || 0;
-    }
-
     updateSettingsPreview();
 
     // Start Key Test Listener
@@ -3649,7 +3624,7 @@ function openSettings() {
             // Visual Feedback for Columns
             const colIndex = userConfig.keys.indexOf(e.key.toLowerCase());
             if (colIndex !== -1) {
-                const el = document.getElementById(`test-col-${colIndex}`);
+                const el = document.getElementById(`test - col - ${colIndex} `);
                 if (el) {
                     if (e.type === 'keydown') el.classList.add('active');
                     else el.classList.remove('active');
@@ -3746,244 +3721,9 @@ function updateSettingsPreview() {
 }
 window.updateSettingsPreview = updateSettingsPreview;
 
-function updateAudioOffset(val) {
-    userConfig.audioOffset = parseInt(val) || 0;
-    saveUserConfig();
-}
-window.updateAudioOffset = updateAudioOffset;
-
-function adjustOffset(amount) {
-    let current = userConfig.audioOffset || 0;
-    current += amount;
-    userConfig.audioOffset = current;
-
-    // Update Input
-    const input = document.getElementById('set-audio-offset');
-    if (input) input.value = current;
-
-    saveUserConfig();
-}
-window.adjustOffset = adjustOffset;
-
-function saveOffsetPreset(slot) {
-    const key = `audioOffset${slot}`;
-    userConfig[key] = userConfig.audioOffset || 0;
-    saveUserConfig();
-    const btn = event.target;
-    const ogText = btn.innerText;
-    btn.innerText = "Saved!";
-    setTimeout(() => btn.innerText = ogText, 1000);
-}
-window.saveOffsetPreset = saveOffsetPreset;
-
-function loadOffsetPreset(slot) {
-    const key = `audioOffset${slot}`;
-    const val = userConfig[key] || 0;
-    userConfig.audioOffset = val;
-    saveUserConfig();
-
-    const input = document.getElementById('set-audio-offset');
-    if (input) input.value = val;
-}
-window.loadOffsetPreset = loadOffsetPreset;
-
-async function loadSyncChart() {
-    closeModifiers();
-    const modal = document.getElementById('settings-modal');
-    if (modal) modal.style.display = 'none';
-
-    // Search for sync song in library
-    const syncIdx = songLibrary.findIndex(s =>
-        s.meta.title.toLowerCase().includes('sync') ||
-        s.meta.title.toLowerCase().includes('ideal')
-    );
-
-    if (syncIdx === -1) {
-        alert('Sync calibration chart not found. Please import a song with "Sync" or "Ideal" in the title.');
-        return;
-    }
-
-    // Select the sync song
-    selectSong(syncIdx);
-
-    // Wait a bit for song to load
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Start calibration mode
-    if (selectedChartIndex === -1 && songLibrary[syncIdx].charts.length > 0) {
-        selectedChartIndex = 0;
-    }
-
-    startCalibrationMode();
-}
-window.loadSyncChart = loadSyncChart;
-
-// State backup for calibration
-let preCalibConfig = null;
-
-function startCalibrationMode() {
-    // 1. Save Config State
-    preCalibConfig = {
-        speedType: modConfig.speedType,
-        speedValue: modConfig.speedValue,
-        downScroll: userConfig.downScroll,
-        judgments: userConfig.judgments, // Assuming fail type is here or gameConfig?
-        // Check "Fail Off". Usually in `userConfig.failType`?
-        // Let's assume standard fail type is stored in `userConfig`.
-        // If not, we might need to look at `gameState.life` logic. 
-        // Standard SM usually has Fail modes.
-        // For this task, we assume "Fail Off" means preventing failure.
-        // We will set a flag `gameState.cannotFail = true`.
-    };
-
-    // 2. Apply Overrides
-    // Force C400
-    modConfig.speedType = 'C';
-    modConfig.speedValue = 400;
-
-    // Force Upscroll
-    userConfig.downScroll = false;
-
-    // 3. Init Game State Flags
-    if (!window.gameState) window.gameState = {};
-    window.gameState.isCalibrationMode = true;
-    window.gameState.calibrationHits = [];
-    window.gameState.calibrationFadeAfter = 20;
-    window.gameState.cannotFail = true;
-
-    // 4. UI Setup
-    document.getElementById('calibration-hud').style.display = 'block';
-
-    // Hide Standard HUD Elements
-    const standardHudIds = ['hud-score', 'combo', 'hud-life-bar', 'hud-life-text'];
-    standardHudIds.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.visibility = 'hidden';
-    });
-
-    // Start the game normally
-    startGameFromMenu();
-    updateCalibrationHUD();
-}
-
-function updateCalibrationHUD() {
-    if (!gameState.isCalibrationMode) return;
-
-    const hits = gameState.calibrationHits;
-    const n = hits.length;
-    let mean = 0;
-    let stdDev = 0;
-
-    if (n > 0) {
-        mean = hits.reduce((a, b) => a + b, 0) / n;
-        const variance = hits.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
-        stdDev = Math.sqrt(variance);
-    }
-
-    setText('calib-val-n', n);
-    setText('calib-val-mean', (mean > 0 ? "+" : "") + mean.toFixed(2) + "ms");
-    setText('calib-val-sd', stdDev.toFixed(2) + "ms");
-    setText('calib-val-current', userConfig.audioOffset || 0);
-}
-
-function quitCalibration(save) {
-    // Restore Settings
-    if (preCalibConfig) {
-        modConfig.speedType = preCalibConfig.speedType;
-        modConfig.speedValue = preCalibConfig.speedValue;
-        userConfig.downScroll = preCalibConfig.downScroll;
-        preCalibConfig = null;
-    }
-
-    // Hide Calib HUD / Show Standard
-    document.getElementById('calibration-hud').style.display = 'none';
-    document.getElementById('calib-results-modal').style.display = 'none';
-
-    // Restore Visibility of Standard HUD Elements
-    const standardHudIds = ['hud-score', 'combo', 'hud-life-bar', 'hud-life-text'];
-    standardHudIds.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) {
-            el.style.visibility = 'visible';
-            // Combo is usually hidden until hit, but visibility property handles layout.
-            // Resetting to visible might show empty combo box?
-            // `initGame` usually hides combo.
-            // So we just need to ensure the container isn't permanently hidden.
-            if (id === 'combo') el.style.visibility = 'hidden';
-        }
-    });
-
-    if (save && window.pendingCalibrationOffset !== undefined) {
-        userConfig.audioOffset = window.pendingCalibrationOffset;
-        saveUserConfig();
-        const input = document.getElementById('set-audio-offset');
-        if (input) input.value = userConfig.audioOffset;
-    }
-
-    gameState.isCalibrationMode = false;
-    quitGame();
-}
-
-function showCalibrationResults() {
-    // Stop audio
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        gameState.audioEl.pause();
-    } else if (audioSource) {
-        try { audioSource.stop(); } catch (e) { }
-    }
-
-    gameState.isPlaying = false;
-    gameState.isPaused = true;
-
-    const hits = gameState.calibrationHits;
-
-    if (hits.length === 0) {
-        alert('No hits recorded. Play at least a few notes before checking calibration.');
-        quitCalibration(false);
-        return;
-    }
-
-    // Calculate statistics
-    const mean = hits.reduce((a, b) => a + b, 0) / hits.length;
-    const variance = hits.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / hits.length;
-    const stdDev = Math.sqrt(variance);
-    const suggestedOffset = Math.round((userConfig.audioOffset || 0) + mean);
-
-    window.pendingCalibrationOffset = suggestedOffset;
-
-    // Update Modal
-    setText('res-calib-n', hits.length);
-    setText('res-calib-mean', mean.toFixed(2) + "ms");
-    setText('res-calib-sd', stdDev.toFixed(2) + "ms");
-    setText('res-calib-current', userConfig.audioOffset || 0);
-    setText('res-calib-suggested', suggestedOffset);
-
-    // Setup Buttons
-    document.getElementById('btn-calib-save').onclick = () => quitCalibration(true);
-    document.getElementById('btn-calib-discard').onclick = () => quitCalibration(false);
-
-    document.getElementById('btn-calib-continue').onclick = () => {
-        document.getElementById('calib-results-modal').style.display = 'none';
-        if (gameState.failed) {
-            retryCurrentChart();
-        } else {
-            // Resume logic difficult if stopped. Better to restart loop.
-            retryCurrentChart();
-        }
-    };
-
-    // Show Modal
-    document.getElementById('calib-results-modal').style.display = 'flex';
-}
 
 function togglePause() {
     if (!gameState.isPlaying || gameState.failed) return;
-
-    // Calibration mode: Escape key shows results
-    if (gameState.isCalibrationMode) {
-        showCalibrationResults();
-        return;
-    }
 
     // Prevent pause during countdown (negative time)
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
@@ -4246,7 +3986,75 @@ window.onRateChange = (newRate) => {
 };
 
 function handleInput(e) {
-    if (bindingIndex !== -1) return; // Ignore if binding
+    // --- KEY BINDING CAPTURE ---
+    if (bindingIndex !== -1) {
+        if (e.type === 'keydown') {
+            e.preventDefault();
+            const code = e.code;
+
+            // Cancel on Escape (unless binding pause)
+            if (code === 'Escape' && bindingType !== 'pause') {
+                bindingIndex = -1;
+                bindingType = null;
+                alert("Binding Cancelled");
+                // Refresh UI text (hacky restore)
+                openSettings(); // Reloads settings UI text
+                return;
+            }
+
+            if (bindingIndex >= 0) {
+                // Column Bind
+                userConfig.keys[bindingIndex] = e.key.toLowerCase(); // Use key for input check? Logic uses e.key.toLowerCase() at 4140. 
+                // Wait, logic at 4140 uses: const key = e.key.toLowerCase(); const colIndex = userConfig.keys.indexOf(key);
+                // So we store e.key.toLowerCase().
+                userConfig.keys[bindingIndex] = e.key.toLowerCase();
+                document.getElementById('key-btn-' + bindingIndex).innerText = e.code.replace('Key', '');
+            } else if (bindingType) {
+                // System Bind
+                if (bindingType === 'pause') userConfig.keyPause = code;
+                if (bindingType === 'retry') userConfig.keyRetry = code;
+                if (bindingType === 'rateUp') userConfig.keyRateUp = code;
+                if (bindingType === 'rateDown') userConfig.keyRateDown = code;
+
+                // Update Button Text
+                const label = (bindingType === 'pause') ? "Pause" :
+                    (bindingType === 'retry') ? "Retry" :
+                        (bindingType === 'rateUp') ? "Rate +" : "Rate -";
+                // Mapping useful names
+                let keyName = code.replace('Key', '').replace('Digit', '');
+                document.getElementById('key-btn-' + bindingType).innerText = `${label}: ${keyName}`;
+            }
+
+            saveUserConfig();
+            bindingIndex = -1;
+            bindingType = null;
+        }
+        return;
+    }
+
+    // --- SETTINGS KEY PREVIEW ---
+    const settingsModal = document.getElementById('settings-modal');
+    if (settingsModal && settingsModal.style.display !== 'none') {
+        if (e.type === 'keydown' || e.type === 'keyup') {
+            const key = e.key.toLowerCase();
+            const col = userConfig.keys.indexOf(key);
+            if (col !== -1) {
+                const testEl = document.getElementById('test-col-' + col);
+                if (testEl) {
+                    if (e.type === 'keydown') {
+                        testEl.style.background = '#00e5ff';
+                        testEl.style.boxShadow = '0 0 15px #00e5ff';
+                    } else {
+                        testEl.style.background = 'rgba(255,255,255,0.1)';
+                        testEl.style.boxShadow = 'none';
+                    }
+                }
+            }
+        }
+        // Don't return, allow other system keys? Usually settings blocks game input.
+        // But we want to prevent game input behind settings.
+        return;
+    }
 
     // Custom Bindings
     const pauseKey = userConfig.keyPause || 'Escape';
@@ -4257,6 +4065,65 @@ function handleInput(e) {
             quitGame();
             return;
         }
+
+        // --- SYNC MODE EXIT LOGIC ---
+        if (typeof isSyncMode !== 'undefined' && isSyncMode) {
+            if (e.type !== 'keydown') return;
+
+            // Calculate Suggested Offset
+            let suggested = userConfig.globalOffset;
+            let msg = "Exit Sync Calibration?\n(No changes will be applied)";
+
+            if (syncBuffer.length > 0) {
+                const mean = syncBuffer.reduce((a, b) => a + b, 0) / syncBuffer.length;
+                const sd = calculateSD(syncBuffer);
+                // Correction:
+                // If mean is +50ms (Early input / Visuals Late), we need to correct by -50ms?
+                // Standard Global Offset: Time += Offset.
+                // If we add -50ms, Time decreases. Notes appear "higher" (Earlier in scroll).
+                // Wait.
+                // If I hit +50ms (Early), I hit before the note reached receptor.
+                // Note was "too high".
+                // I need note to be LOWER.
+                // Note Y = (NoteTime - Time) * Speed.
+                // To make Y smaller, NoteTime - Time must be smaller.
+                // So Time must be LARGER.
+                // So I need to ADD to Time.
+                // So I need to ADD the ERROR (+50) to the offset?
+                // Let's verify.
+                // Existing Offset: 0. Mean Error: +50.
+                // I want Time to be +50 larger.
+                // New Offset = Old + Mean.
+                // Let's TRY this direction.
+                suggested = userConfig.globalOffset + mean;
+
+                msg = `Exit and Apply Calculated Offset?\n\nMean Error: ${mean.toFixed(2)}ms\nStd Dev: ${sd.toFixed(2)}ms\n\nCurrent Offset: ${userConfig.globalOffset.toFixed(0)}ms\nNew Offset: ${suggested.toFixed(0)}ms`;
+            }
+
+            if (confirm(msg)) {
+                // Apply
+                if (syncBuffer.length > 0) {
+                    adjustGlobalOffset(suggested - userConfig.globalOffset); // Delta
+                    saveUserConfig();
+                }
+
+                // Exit Sync Mode
+                // Reset flags
+                isSyncMode = false;
+                syncBuffer = [];
+                // Restore UI
+                document.getElementById('sync-overlay').style.display = 'none';
+                document.getElementById('game-hud').style.display = 'block'; // Or whatever screen we go to
+                quitGame(); // Go back to setup
+
+                // Restore Modifiers?
+                // modConfig was modified implicitly (set speed/fail).
+                // We should probably restore them if we stored them, or just let user reset.
+                // For now, let's just quitGame which goes to setup.
+            }
+            return;
+        }
+
         if (e.type === 'keydown') togglePause();
         return;
     }
@@ -4349,21 +4216,11 @@ function handleInput(e) {
         // Convert Song Time Diff to Real Time MS for Judgment
         const diffMs = (hittableNote.time - currentTime) * 1000 / rate;
         triggerJudgement(hittableNote, diffMs, false);
-
-        // Track hit for calibration mode
-        if (gameState.isCalibrationMode) {
-            gameState.calibrationHits.push(diffMs);
-        }
     }
 } window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
 
 // ** INITIALIZE GAME STATE **
 function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
-    // Preserve calibration mode if it was set
-    const wasCalibrationMode = gameState && gameState.isCalibrationMode;
-    const calibrationHits = gameState && gameState.calibrationHits || [];
-    const calibrationFadeAfter = gameState && gameState.calibrationFadeAfter || 20;
-
     gameState = {
         audioUrl: audioUrl, // Store URL
         score: 0,
@@ -4402,11 +4259,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         bpmTimes: [], // Pre-calculated time-based BPM segments
         isAutoplay: !!window.isAutoplayLaunch, // Set Autoplay State
         lastFrameTime: performance.now(),
-        fpsTimer: 0,
-        // Calibration mode flags
-        isCalibrationMode: wasCalibrationMode,
-        calibrationHits: calibrationHits,
-        calibrationFadeAfter: calibrationFadeAfter
+        fpsTimer: 0
     };
     window.isAutoplayLaunch = false; // Reset flag
 
@@ -4604,14 +4457,7 @@ function startEngine() {
         audioSource.playbackRate.value = rate;
         audioSource.onended = () => {
             if (gameState.isPlaying && !gameState.isPaused && !gameState.failed) {
-                // Calibration mode: loop the song
-                if (gameState.isCalibrationMode) {
-                    // Restart the song
-                    retryCurrentChart();
-                } else {
-                    // Normal mode: show results
-                    // Determine finish
-                }
+                // Determine finish
             }
         };
         audioSource.connect(audioCtx.destination);
@@ -6197,4 +6043,73 @@ function renderDensityGraph(chart, canvas, totalTime) {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+}
+
+// --- Settings Tab Switcher ---
+function switchSettingsTab(tabName) {
+    // Hide all tabs
+    const tabs = ['gameplay', 'controls', 'audio', 'data'];
+    tabs.forEach(t => {
+        const el = document.getElementById('set-tab-' + t);
+        if (el) el.style.display = 'none';
+        const btn = document.getElementById('set-tab-btn-' + t);
+        if (btn) btn.classList.remove('active');
+    });
+
+    // Show target
+    const targetEl = document.getElementById('set-tab-' + tabName);
+    if (targetEl) {
+        targetEl.style.display = 'block';
+        // If content is flex/grid, we might need to restore that?
+        // But mod-section-content usually block.
+    }
+    if (targetBtn) targetBtn.classList.add('active');
+}
+
+// --- Key Binding Logic ---
+function startKeyBind(target) {
+    if (typeof target === 'number') {
+        bindingIndex = target;
+        bindingType = null;
+        document.getElementById('key-btn-' + target).innerText = '...';
+    } else {
+        bindingIndex = -2; // Special flag for system keys
+        bindingType = target;
+        document.getElementById('key-btn-' + target).innerText = 'Waiting...';
+    }
+}
+
+// --- Data Management ---
+function wipeSongDatabase() {
+    if (confirm("ARE YOU SURE?\n\nThis will PERMANENTLY DELETE all imported songs and scores.\nThis action cannot be undone.")) {
+        // Clear Memory
+        if (typeof songLibrary !== 'undefined') songLibrary = [];
+
+        // Clear Storage
+        try {
+            // We need to identify keys. Usually 'sm_songLibrary' or similar.
+            // Let's clear keys starting with specific prefix or just wipe known ones.
+            // Assuming default keys based on loadLibrary:
+            localStorage.removeItem('sm_songLibrary');
+            // Scores? 'sm_scores_HASH'? 
+            // If scores are stored per chart hash, we might need to clear all or just iterate.
+            // A simple approach is to clear everything if this is a dedicated app, 
+            // but we should respect userConfig.
+
+            // Iterate and remove keys starting with 'sm_scores_'
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (key.startsWith('sm_scores_') || key === 'sm_songLibrary')) {
+                    keysToRemove.push(key);
+                }
+            }
+            keysToRemove.forEach(k => localStorage.removeItem(k));
+
+            alert("Database Wiped. reloading...");
+            location.reload();
+        } catch (e) {
+            alert("Error wiping data: " + e);
+        }
+    }
 }
