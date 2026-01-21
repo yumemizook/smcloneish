@@ -1760,7 +1760,7 @@ input[type=range]::-webkit-slider-runnable-track {
 
 /* Judgment Sprite Logic */
 #judgment {
-    width: 340px;
+    width: 400px;
     height: 85px;
     background-image: url("Neo%20Sekai%202x6%20(doubleres).png");
     background-size: 200% 600%;
