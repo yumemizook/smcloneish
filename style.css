@@ -1771,6 +1771,8 @@ input[type=range]::-webkit-slider-runnable-track {
     font-size: 0;
     opacity: 0;
     transition: opacity 0.1s;
+    flex-shrink: 0;
+    /* Prevent squashing if container is too small */
 }
 
 @keyframes pulse {
