@@ -1386,14 +1386,6 @@ function selectDifficulty(chartIndex) {
                 addJ(J.bad, "#aa00ff");
                 addJ(J.miss, "#ff3333");
 
-                // Render Buttons (Inline with Judgments)
-                const hasReplay = top.replayLog && top.replayLog.length > 0;
-                const btnStyle = "background:rgba(255,255,255,0.1); color:#fff; border:1px solid #555; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;";
-                const resBtn = `<button onclick='viewScoreResults(${JSON.stringify(top)})' style='${btnStyle}'>📄 Results</button>`;
-                const repBtn = hasReplay ? `<button onclick='startReplay(${JSON.stringify(top)}, songLibrary[selectedSongIndex], songLibrary[selectedSongIndex].charts[selectedChartIndex])' style='${btnStyle} color:#00e5ff; border-color:#00e5ff;'>▶ Replay</button>` : "";
-
-                // Append as a group to keep them together
-                jGrid.innerHTML += `<div id="bs-actions">${resBtn}${repBtn}</div>`;
             }
 
         } else {
@@ -1562,7 +1554,7 @@ function calculateDetailedDifficulty(notes) {
         // If window contains both 16th-family and 12th-family notes, boost Tech
         const mixedBonus = (hasBinary && hasTernary) ? 1.15 : 1.0;
 
-        let sStr = penalizedNPS * rate; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
+        let sStr = penalizedNPS * rate * avgComplexity; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
         let sJs = penalizedNPS * rate; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
         if (jumpRatio < 0.2) sJs *= 0.2; else sJs *= (0.8 + jumpRatio * 0.4); jsStrains.push(sJs);
         let sHs = 0; if (handCount > 0) { sHs = (penalizedNPS * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
@@ -1663,7 +1655,14 @@ function calculateDetailedDifficulty(notes) {
     };
     const skills = [result.stream, result.jumpstream, result.handstream, result.chordjack, result.technical, result.stamina];
     skills.sort((a, b) => b - a);
-    let overall = (skills[0] * 1.5 + skills[1] * 0.5 + skills[2] * 0.2) / (1.5 + 0.5 + 0.2);
+    let topSkills = skills.slice(0, 3);
+    // Conditional S3: If 3rd skill is too low (< 90% of 2nd), drop it.
+    if (topSkills.length === 3 && topSkills[2] < topSkills[1] * 0.9) {
+        topSkills.pop();
+    }
+    const sumSq = topSkills.reduce((a, b) => a + (b * b), 0);
+    const sum = topSkills.reduce((a, b) => a + b, 0);
+    let overall = sum > 0 ? sumSq / sum : 0;
     result.overall = overall;
     return result;
 }
@@ -2918,12 +2917,56 @@ function showResults() {
         setText(`res-pct-${type}`, `${pct}%`);
     };
     ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss', 'ok', 'ng'].forEach(updateJudgeRes);
+    saveScore(); // Ensure score is saved!
 
     handleLeaderboard();
     drawOffsetGraph();
     drawLifeComboChart();
     drawAccuracyGraph();
     saveLibrary(); // Autosave library state if needed
+}
+
+// Start Replay Playback
+function startReplay(scoreEntry, songOverride, chartOverride) {
+    let replayData = null;
+
+    if (scoreEntry && scoreEntry.replayLog) {
+        replayData = scoreEntry.replayLog;
+    } else if (gameState && gameState.replayLog) {
+        replayData = gameState.replayLog;
+    }
+
+    if (!replayData || replayData.length === 0) {
+        alert('No replay data available!');
+        return;
+    }
+
+    // Store replay data in window for initGame to use
+    window.replayData = [...replayData];
+    window.isReplayLaunch = true;
+
+    // Hide replay button
+    const replayBtn = document.getElementById('replay-btn');
+    if (replayBtn) replayBtn.style.display = 'none';
+
+    // If song and chart are provided (from leaderboard/best score click), ensure they are selected
+    if (songOverride && chartOverride) {
+        const sIdx = songLibrary.indexOf(songOverride);
+        if (sIdx !== -1) {
+            selectedSongIndex = sIdx;
+            const cIdx = songOverride.charts.indexOf(chartOverride);
+            if (cIdx !== -1) {
+                selectedChartIndex = cIdx;
+            }
+        }
+    }
+
+    // Restart the same chart in replay mode
+    if (selectedSongIndex !== -1 && selectedChartIndex !== -1) {
+        startGameFromMenu(); // This will restart with replay mode enabled
+    } else {
+        alert('Cannot start replay: Chart information not available');
+    }
 }
 
 function quitGame() {
@@ -3414,6 +3457,7 @@ function drawNPSGraph() {
     });
     ctx.stroke();
 }
+
 function gameLoop() {
     if (!gameState.isPlaying || (gameState.isPaused && !gameState.singleFrameStep)) return;
     if (gameState.singleFrameStep) {
@@ -3425,18 +3469,18 @@ function gameLoop() {
 
     // FPS / Latency Calculation
     const now = performance.now();
-    const delta = now - gameState.lastFrameTime;
+    const frameTime = now - gameState.lastFrameTime;
     gameState.lastFrameTime = now;
 
     // Throttle UI Update (every 200ms)
     if (typeof gameState.fpsTimer === 'undefined') gameState.fpsTimer = 0;
-    gameState.fpsTimer += delta;
+    gameState.fpsTimer += frameTime;
 
     if (gameState.fpsTimer >= 200) {
-        const fps = delta > 0 ? 1000 / delta : 0;
+        const fps = frameTime > 0 ? 1000 / frameTime : 0;
         const fpsEl = document.getElementById('hud-fps-counter');
         if (fpsEl) {
-            fpsEl.innerHTML = `<span style="color:#fff">${Math.round(fps)}</span> FPS <span style="font-size:0.8em; color:#aaa">(${delta.toFixed(1)}ms)</span>`;
+            fpsEl.innerHTML = `<span style="color:#fff">${Math.round(fps)}</span> FPS <span style="font-size:0.8em; color:#aaa">(${frameTime.toFixed(1)}ms)</span>`;
             // Color Coding
             if (fps < 30) fpsEl.style.color = '#ff3333';
             else if (fps < 55) fpsEl.style.color = '#ffcc00';
@@ -3445,452 +3489,476 @@ function gameLoop() {
         gameState.fpsTimer = 0;
     }
 
-    let currentTime = 0;
-    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        if (!gameState.audioEl.paused) {
-            currentTime = gameState.audioEl.currentTime;
-        } else if (Date.now() < gameState.startTime) {
-            // Countdown phase
-            currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
-        }
-        // Check end
-        if (gameState.audioEl.ended) {
-            // Handle finish similar to audioSource.onended or simple timeout check
-        }
-    } else {
-        // Vinyl Mode
-        currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
-    }
-
-    // --- AUDIO OFFSET APPLICATION ---
-    // User wants GLOBAL OFFSET.
-    // If Global Offset is +10ms, it means audio is "late" relative to input? 
-    // Or Input is "early"?
-    // Standard: Offset shifts the Visual Time relative to Audio Time.
-    // Time used for Visuals and Judgement = AudioTime + Offset.
-    // If Offset is positive, Time increases. Visuals move further.
-    // If user hits early (+offsets), they need visuals to be 'later' (less advanced)? No.
-    // Let's stick to standard: Time += Offset.
-    // If I hit early (+50ms), I need notes to arrive LATER.
-    // Note position = (NoteTime - Time) * Speed.
-    // If I add to Time, (NoteTime - Time) becomes SMALLER.
-    // Notes move "down" (past) faster.
-    // If I hit early, the note was "too high". I need it "lower" (closer to target).
-    // So I need Time to be LARGER.
-    // So Time += Offset is correct for fixing Early hits (if positive offset).
-    if (userConfig.globalOffset) {
-        currentTime += (userConfig.globalOffset / 1000);
-    }
-
-    // --- SYNC INSTRUCTION FADE-IN ---
-    if (window.isSyncMode) {
-        const instr = document.getElementById('sync-instruction');
-        if (instr) {
-            // Fade in between 4s and 5s
-            if (currentTime > 4.0) {
-                const opacity = Math.min(1, currentTime - 4.0);
-                instr.style.opacity = opacity.toString();
-            } else {
-                instr.style.opacity = '0';
-            }
-        }
-    }
-
-
-    // --- SYNC CALIBRATION LOOP (Retry-based approach) ---
-    if (window.isSyncMode) {
-        // Update Sync Stats UI
-        if (typeof lastSyncCount === 'undefined' || lastSyncCount !== window.syncBuffer.length) {
-            updateSyncStats();
-            lastSyncCount = window.syncBuffer.length;
-        }
-
-        // Check if chart ended - if so, restart via retry
-        const lastNote = gameState.notes[gameState.notes.length - 1];
-        if (lastNote && currentTime > lastNote.time + 1.0) {
-
-
-            // Stop current game
-            if (window.audioSource) try { window.audioSource.stop(); } catch (e) { }
-            if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
-            gameState.isPlaying = false;
-
-            // Restart the chart using the normal game start function
-            startGameFromMenu().catch(e => console.error('[SYNC] Restart failed:', e));
-
-            // Exit game loop - it will restart with fresh state
-            return;
-        }
-    }
-
-    // Speed is handled by updateScrollSpeed() called on init and rate change.
-    // Removed inline override that was causing rate scaling issues.
-
-    gameState.globalFrame++;
-
-    // Update BPM Display
-    if (gameState.chart && gameState.chart.bpms) {
-        // Find BPM at current time.
-        // Since converting Time -> Beat is complex with stops/warps, 
-        // and we prioritize performance, let's approximate or use pre-calculated events if available.
-        // Ideally, we'd have a 'cursor' for BPMs.
-        // Let's use a cached index `gameState.bpmIndex`.
-        if (typeof gameState.bpmIndex === 'undefined') gameState.bpmIndex = 0;
-
-        const bpms = gameState.chart.bpms;
-        // Advance cursor
-        // Note: bpms are usually in BEATS. We have TIME.
-        // We need the `time` for each BPM change.
-        // If the parser didn't calculate absolute times for BPM changes, we are stuck.
-        // The provided parser usually does `calculateTimingData`?
-        // If `gameState.chart.bpms` has `.time` prop, we are good.
-        // Let's Assume they might NOT. 
-        // If they don't, we can't easily display LIVE BPM without sync logic.
-        // *Fallback*: Display the initial BPM or a fixed value if generic.
-        // *Check*: parsedSM usually has beat/value.
-        // *Recovery*: If we can't do live, verify if user accepts static.
-        // *Better*: Let's peek at `gameState.activeNotes`. They have `beat` and `time`.
-        // We can interpolate currentBeat from nearby notes?
-
-        // Let's fallback to `gameState.startingBPM` inside `initGame` logic if we can't find it.
-        // But wait, user requested "current difficulty... as well as the BPM".
-        // It likely implies live BPM.
-
-        // Let's assume for this task that we can just display the initial for now if complexity is high,
-        // OR check if we have `timingData` with times.
-        // If I look at `initGame`, `calculateDetailedDifficulty` uses notes.
-
-        // Let's try to update it if `gameState.currentBPM` is set by other logic (e.g. scroll update).
-        if (gameState.currentBPM) {
-            setText('hud-val-bpm', Math.round(gameState.currentBPM));
-        }
-    }
-
-    // Update BPM Display
-    // We need to find current BPM at 'currentTime'.
-    // Assuming 'gameState.chart.bpms' exists (parsed Simfile).
-    if (gameState.chart && gameState.chart.bpms) {
-        // Simple search (can be optimized)
-        // BPMs: [{beat, value}]
-        // We need current beat.
-        // We can get beat from time? Or if we track currentBeat global?
-        // Let's rely on finding standard BPM for now.
-        // If we don't have a reliable getBeatFromTime function in scope, we might ESTIMATE.
-        // Actually, logic usually iterates bpms to find scroll/speed.
-        // Let's just find the latest BPM <= currentTime (converted to beat? or mapped).
-        // Standard SM parsers act on Beats.
-        // Without a robust Time->Beat sync in this loop text, we might just show initial or rely on a helper.
-        // Let's assume we can get it via a helper or last active.
-        // If not, we skip dynamic BPM for now and show valid initial.
-        // WAIT: 'updateScrollSpeed' usually deals with BPM if CMOD is not used.
-        // Let's try to fetch it if we can.
-        // Hack: Just display the first BPM or last seen.
-        // BETTER: Use 'currentBPM' tracked variable if exists.
-        // If not, let's look for it in activeNotes? No.
-        // Let's iterate bpms:
-        // Update BPM Display
-        let currentBPM = 120;
-        if (typeof getCurrentBPM === 'function') {
-            currentBPM = getCurrentBPM();
-        } else if (gameState.chart && gameState.chart.bpms && gameState.chart.bpms.length > 0) {
-            currentBPM = gameState.chart.bpms[0].bpm;
-        }
-
+    // Main game logic block
+    {
+        let currentTime = 0;
         const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-        const displayBPM = currentBPM * rate;
 
-        // Throttle BPM Text Update
-        if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
-            setText('hud-val-bpm', displayBPM.toFixed(2));
-            gameState.lastBPMUpdateVal = displayBPM;
+        if (gameState.mode === 'stretch' && gameState.audioEl) {
+            if (!gameState.audioEl.paused) {
+                currentTime = gameState.audioEl.currentTime;
+            } else if (Date.now() < gameState.startTime) {
+                // Countdown phase
+                currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
+            }
+            // Check end
+            if (gameState.audioEl.ended) {
+                // Handle finish similar to audioSource.onended or simple timeout check
+            }
+        } else {
+            // Vinyl Mode
+            currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
         }
-    }
 
-    // --- AUTOPLAY LOGIC ---
-    if (gameState.isAutoplay) {
-        gameState.heldKeys = [false, false, false, false];
-        // Scan for new hits and maintain holds
-        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
-            const n = gameState.activeNotes[i];
+        // --- AUDIO OFFSET APPLICATION ---
+        // User wants GLOBAL OFFSET.
+        // If Global Offset is +10ms, it means audio is "late" relative to input? 
+        // Or Input is "early"?
+        // Standard: Offset shifts the Visual Time relative to Audio Time.
+        // Time used for Visuals and Judgement = AudioTime + Offset.
+        // If Offset is positive, Time increases. Visuals move further.
+        // If user hits early (+offsets), they need visuals to be 'later' (less advanced)? No.
+        // Let's stick to standard: Time += Offset.
+        // If I hit early (+50ms), I need notes to arrive LATER.
+        // Note position = (NoteTime - Time) * Speed.
+        // If I add to Time, (NoteTime - Time) becomes SMALLER.
+        // Notes move "down" (past) faster.
+        // If I hit early, the note was "too high". I need it "lower" (closer to target).
+        // So I need Time to be LARGER.
+        // So Time += Offset is correct for fixing Early hits (if positive offset).
+        if (userConfig.globalOffset) {
+            currentTime += (userConfig.globalOffset / 1000);
+        }
 
-            // Optimization: Don't scan too far into future
-            if (n.time > currentTime + 0.1) break;
-
-            // 1. Hit new notes
-            if (!n.processed && n.holdState !== 'active' && n.type !== 'mine') {
-                if (n.time <= currentTime) {
-                    processInput(n.col, 'down', currentTime, rate);
-                    setTimeout(() => processInput(n.col, 'up', currentTime, rate), 50);
+        // --- SYNC INSTRUCTION FADE-IN ---
+        if (window.isSyncMode) {
+            const instr = document.getElementById('sync-instruction');
+            if (instr) {
+                // Fade in between 4s and 5s
+                if (currentTime > 4.0) {
+                    const opacity = Math.min(1, currentTime - 4.0);
+                    instr.style.opacity = opacity.toString();
+                } else {
+                    instr.style.opacity = '0';
                 }
             }
-            // 2. Maintain active Holds/Rolls
-            if ((n.type === 'hold' || n.type === 'roll') && n.holdState === 'active') {
-                // processInput handles hold maintenance if 'down' is sent? 
-                // processInput logic sets holds[col]=true but doesn't re-trigger hit.
-                // But it updates roll lastPressTime? 
-                // Actually the roll logic in processInput is: IF keydown, update lastPressTime.
-                // Autoplay simulates KEY HOLD.
-                gameState.heldKeys[n.col] = true;
-                if (n.type === 'roll') n.lastPressTime = currentTime;
+        }
+
+
+        // --- SYNC CALIBRATION LOOP (Retry-based approach) ---
+        if (window.isSyncMode) {
+            // Update Sync Stats UI
+            if (typeof lastSyncCount === 'undefined' || lastSyncCount !== window.syncBuffer.length) {
+                updateSyncStats();
+                lastSyncCount = window.syncBuffer.length;
+            }
+
+            // Check if chart ended - if so, restart via retry
+            const lastNote = gameState.notes[gameState.notes.length - 1];
+            if (lastNote && currentTime > lastNote.time + 1.0) {
+
+
+                // Stop current game
+                if (window.audioSource) try { window.audioSource.stop(); } catch (e) { }
+                if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
+                gameState.isPlaying = false;
+
+                // Restart the chart using the normal game start function
+                startGameFromMenu().catch(e => console.error('[SYNC] Restart failed:', e));
+
+                // Exit game loop - it will restart with fresh state
+                return;
             }
         }
-    }
 
-    // --- REPLAY LOGIC ---
-    if (gameState.isReplay && gameState.replayLog) {
-        const log = gameState.replayLog;
-        // Process events up to current time
-        while (gameState.replayIndex < log.length) {
-            const evt = log[gameState.replayIndex];
-            // Check time. evt.t is Song Time.
-            if (evt.t <= currentTime) {
-                // Apply Event
-                const type = evt.e === 1 ? 'down' : 'up';
-                processInput(evt.c, type, currentTime, rate);
-                gameState.replayIndex++;
-            } else {
+        // Speed is handled by updateScrollSpeed() called on init and rate change.
+        // Removed inline override that was causing rate scaling issues.
+
+        gameState.globalFrame++;
+
+        // Update BPM Display
+        if (gameState.chart && gameState.chart.bpms) {
+            // Find BPM at current time.
+            // Since converting Time -> Beat is complex with stops/warps, 
+            // and we prioritize performance, let's approximate or use pre-calculated events if available.
+            // Ideally, we'd have a 'cursor' for BPMs.
+            // Let's use a cached index `gameState.bpmIndex`.
+            if (typeof gameState.bpmIndex === 'undefined') gameState.bpmIndex = 0;
+
+            const bpms = gameState.chart.bpms;
+            // Advance cursor
+            // Note: bpms are usually in BEATS. We have TIME.
+            // We need the `time` for each BPM change.
+            // If the parser didn't calculate absolute times for BPM changes, we are stuck.
+            // The provided parser usually does `calculateTimingData`?
+            // If `gameState.chart.bpms` has `.time` prop, we are good.
+            // Let's Assume they might NOT. 
+            // If they don't, we can't easily display LIVE BPM without sync logic.
+            // *Fallback*: Display the initial BPM or a fixed value if generic.
+            // *Check*: parsedSM usually has beat/value.
+            // *Recovery*: If we can't do live, verify if user accepts static.
+            // *Better*: Let's peek at `gameState.activeNotes`. They have `beat` and `time`.
+            // We can interpolate currentBeat from nearby notes?
+
+            // Let's fallback to `gameState.startingBPM` inside `initGame` logic if we can't find it.
+            // But wait, user requested "current difficulty... as well as the BPM".
+            // It likely implies live BPM.
+
+            // Let's assume for this task that we can just display the initial for now if complexity is high,
+            // OR check if we have `timingData` with times.
+            // If I look at `initGame`, `calculateDetailedDifficulty` uses notes.
+
+            // Let's try to update it if `gameState.currentBPM` is set by other logic (e.g. scroll update).
+            if (gameState.currentBPM) {
+                setText('hud-val-bpm', Math.round(gameState.currentBPM));
+            }
+        }
+
+        // Update BPM Display
+        // We need to find current BPM at 'currentTime'.
+        // Assuming 'gameState.chart.bpms' exists (parsed Simfile).
+        if (gameState.chart && gameState.chart.bpms) {
+            // Simple search (can be optimized)
+            // BPMs: [{beat, value}]
+            // We need current beat.
+            // We can get beat from time? Or if we track currentBeat global?
+            // Let's rely on finding standard BPM for now.
+            // If we don't have a reliable getBeatFromTime function in scope, we might ESTIMATE.
+            // Actually, logic usually iterates bpms to find scroll/speed.
+            // Let's just find the latest BPM <= currentTime (converted to beat? or mapped).
+            // Standard SM parsers act on Beats.
+            // Without a robust Time->Beat sync in this loop text, we might just show initial or rely on a helper.
+            // Let's assume we can get it via a helper or last active.
+            // If not, we skip dynamic BPM for now and show valid initial.
+            // WAIT: 'updateScrollSpeed' usually deals with BPM if CMOD is not used.
+            // Let's try to fetch it if we can.
+            // Hack: Just display the first BPM or last seen.
+            // BETTER: Use 'currentBPM' tracked variable if exists.
+            // If not, let's look for it in activeNotes? No.
+            // Let's iterate bpms:
+            // Update BPM Display
+            let currentBPM = 120;
+            if (typeof getCurrentBPM === 'function') {
+                currentBPM = getCurrentBPM();
+            } else if (gameState.chart && gameState.chart.bpms && gameState.chart.bpms.length > 0) {
+                currentBPM = gameState.chart.bpms[0].bpm;
+            }
+
+            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+            const displayBPM = currentBPM * rate;
+
+            // Throttle BPM Text Update
+            if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
+                setText('hud-val-bpm', displayBPM.toFixed(2));
+                gameState.lastBPMUpdateVal = displayBPM;
+            }
+        }
+
+        // --- AUTOPLAY LOGIC ---
+        if (gameState.isAutoplay) {
+            gameState.heldKeys = [false, false, false, false];
+            // Scan for new hits and maintain holds
+            for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+                const n = gameState.activeNotes[i];
+
+                // Optimization: Don't scan too far into future
+                if (n.time > currentTime + 0.1) break;
+
+                // 1. Hit new notes at perfect timing (0.00ms offset)
+                if (!n.processed && n.holdState !== 'active' && n.type !== 'mine') {
+                    // Hit the note when currentTime is very close to note time (within 1ms)
+                    const timeDiff = (n.time - currentTime) * 1000; // Convert to ms
+                    if (Math.abs(timeDiff) <= 1) {
+                        // Hit at exactly the note time for 0.00ms offset
+                        processInput(n.col, 'down', n.time, rate);
+                        setTimeout(() => processInput(n.col, 'up', n.time, rate), 50);
+                    }
+                }
+                // 2. Maintain active Holds/Rolls
+                if ((n.type === 'hold' || n.type === 'roll') && n.holdState === 'active') {
+                    // processInput handles hold maintenance if 'down' is sent? 
+                    // processInput logic sets holds[col]=true but doesn't re-trigger hit.
+                    // But it updates roll lastPressTime? 
+                    // Actually the roll logic in processInput is: IF keydown, update lastPressTime.
+                    // Autoplay simulates KEY HOLD.
+                    gameState.heldKeys[n.col] = true;
+                    if (n.type === 'roll') n.lastPressTime = currentTime;
+                }
+            }
+        }
+
+        // --- REPLAY LOGIC ---
+        if (gameState.isReplay && gameState.replayLog) {
+            const log = gameState.replayLog;
+            // Process events up to current time
+            while (gameState.replayIndex < log.length) {
+                const evt = log[gameState.replayIndex];
+                // Check time. evt.t is Song Time.
+                if (evt.t <= currentTime) {
+                    // Apply Event
+                    const type = evt.e === 1 ? 'down' : 'up';
+                    processInput(evt.c, type, currentTime, rate);
+                    gameState.replayIndex++;
+                } else {
+                    break;
+                }
+            }
+        }
+
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Update First Active Note (Skip old processed notes)
+        // Note: hit/missed notes set .processed=true.
+        while (gameState.firstActiveNoteIndex < gameState.activeNotes.length) {
+            if (!gameState.activeNotes[gameState.firstActiveNoteIndex].processed) break;
+            gameState.firstActiveNoteIndex++;
+        }
+
+        // Pre-calculate active holds for this frame to optimize drawReceptor
+        gameState.colsActive = [false, false, false, false];
+
+        // Determine visible Window
+        // Reuse static array to reduce GC
+        if (!gameState.visibleNotesCache) gameState.visibleNotesCache = [];
+        const visibleNotes = gameState.visibleNotesCache;
+        visibleNotes.length = 0;
+
+        const maxVisibleTime = currentTime + (canvas.height / gameConfig.scrollSpeed) + 2.0; // Buffer
+
+        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+            const note = gameState.activeNotes[i];
+
+            // Check for Active Hold
+            if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+                gameState.colsActive[note.col] = true;
+            }
+
+            // Keep active holds even if time < currentTime
+            if (note.time > maxVisibleTime) {
+                // Optimization: Stop iterating if future notes are off screen
                 break;
             }
-        }
-    }
 
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Update First Active Note (Skip old processed notes)
-    // Note: hit/missed notes set .processed=true.
-    while (gameState.firstActiveNoteIndex < gameState.activeNotes.length) {
-        if (!gameState.activeNotes[gameState.firstActiveNoteIndex].processed) break;
-        gameState.firstActiveNoteIndex++;
-    }
-
-    // Pre-calculate active holds for this frame to optimize drawReceptor
-    gameState.colsActive = [false, false, false, false];
-
-    // Determine visible Window
-    // Reuse static array to reduce GC
-    if (!gameState.visibleNotesCache) gameState.visibleNotesCache = [];
-    const visibleNotes = gameState.visibleNotesCache;
-    visibleNotes.length = 0;
-
-    const maxVisibleTime = currentTime + (canvas.height / gameConfig.scrollSpeed) + 2.0; // Buffer
-
-    for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
-        const note = gameState.activeNotes[i];
-
-        // Check for Active Hold
-        if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-            gameState.colsActive[note.col] = true;
+            visibleNotes.push(note);
         }
 
-        // Keep active holds even if time < currentTime
-        if (note.time > maxVisibleTime) {
-            // Optimization: Stop iterating if future notes are off screen
-            break;
+
+
+        // Cache rotation arrays to avoid recreation every frame
+        if (!gameState.spriteRotations) gameState.spriteRotations = [90, 0, 180, 270];
+        if (!gameState.vectorRotations) gameState.vectorRotations = [270, 180, 0, 90];
+        const rotations = assets.loaded.arrowSprite ? gameState.spriteRotations : gameState.vectorRotations;
+        for (let i = 0; i < 4; i++) {
+            drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i);
         }
 
-        visibleNotes.push(note);
-    }
+        // Process & Draw Visible Notes
+        // Process & Draw Visible Notes
+        visibleNotes.forEach(note => {
+            // --- HOLD LOGIC ---
+            // If the note is a hold/roll that was hit (triggered active)
+            if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
 
+                // 1. Check if finalized (reached end)
+                if (currentTime >= note.endTime) {
+                    note.holdState = 'ok';
+                    triggerHoldJudgement(note, true); // Trigger OK judgment
 
-
-    const spriteRotations = [90, 0, 180, 270];
-    const vectorRotations = [270, 180, 0, 90];
-    for (let i = 0; i < 4; i++) {
-        let rot = assets.loaded.receptorSprite ? spriteRotations[i] : vectorRotations[i];
-        drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rot, i);
-    }
-
-    // Process & Draw Visible Notes
-    // Process & Draw Visible Notes
-    visibleNotes.forEach(note => {
-        // --- HOLD LOGIC ---
-        // If the note is a hold/roll that was hit (triggered active)
-        if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-
-            // 1. Check if finalized (reached end)
-            if (currentTime >= note.endTime) {
-                note.holdState = 'ok';
-                triggerHoldJudgement(note, true); // Trigger OK judgment
-                return;
-            }
-
-            // 2. Check input status
-            const keyHeld = gameState.heldKeys[note.col];
-
-            if (note.type === 'hold') {
-                if (!keyHeld) {
-                    // Key released! Start grace period logic.
-                    if (!note.letGoTime) {
-                        note.letGoTime = currentTime; // Record when let go
+                    // If key is still held when hold ends, require a fresh press for next note
+                    if (gameState.heldKeys[note.col]) {
+                        if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
+                        gameState.needsRelease[note.col] = true;
                     }
+                    return;
+                }
 
-                    // Check if grace period expired (250ms)
-                    if ((currentTime - note.letGoTime) * 1000 > 250) {
+                // 2. Check input status
+                const keyHeld = gameState.heldKeys[note.col];
+
+                if (note.type === 'hold') {
+                    if (!keyHeld) {
+                        // Key released! Start grace period logic.
+                        if (!note.letGoTime) {
+                            note.letGoTime = currentTime; // Record when let go
+                        }
+
+                        // Check if grace period expired (250ms)
+                        if ((currentTime - note.letGoTime) * 1000 > 250) {
+                            note.holdState = 'ng';
+                            triggerHoldJudgement(note, false); // Fail
+
+                            // If key is still held when hold fails, require a fresh press for next note
+                            if (gameState.heldKeys[note.col]) {
+                                if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
+                                gameState.needsRelease[note.col] = true;
+                            }
+                        }
+                    } else {
+                        // Key IS held.
+                        // If we were in grace period (letGoTime set), we recovered!
+                        note.letGoTime = null;
+                    }
+                } else if (note.type === 'roll') {
+                    // Roll logic: check time since last press
+                    const limit = 0.5; // 500ms roll window
+                    const timeDiff = currentTime - note.lastPressTime;
+
+                    if (timeDiff > limit) {
                         note.holdState = 'ng';
-                        triggerHoldJudgement(note, false); // Fail
+                        triggerHoldJudgement(note, false);
+
+                        // If key is still held when roll fails, require a fresh press for next note
+                        if (gameState.heldKeys[note.col]) {
+                            if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
+                            gameState.needsRelease[note.col] = true;
+                        }
+                    } else {
+                        // Roll Transparency Feedback (Fade as it gets closer to dying)
+                        // timeDiff 0 -> 1.0 opacity
+                        // timeDiff 0.5 -> 0.0 opacity (or minimal visible)
+                        // Let's keep min opacity 0.3 so it's visible.
+                        // Formula: 1 - (timeDiff / limit)
+                        // We need to pass this alpha to the draw function? 
+                        // The draw function below (drawImage) uses globalAlpha?
+                        // We need to set a custom property on the note for the draw routine to read?
+                        // Or verify if we are drawing the BODY here or later?
+                        // This loop iterates visibleNotes but doesn't DRAW them yet.
+                        // The drawing happens in a separate loop? No.
+                        // Wait, `visibleNotes.forEach` block IS processing. where is drawing?
+
+                        // Ah, this block (3206) is "Process & Draw Visible Notes" but I don't see drawImage calls for Body here.
+                        // Let me check further down.
+                        note.rollAlpha = Math.max(0.2, 1 - (timeDiff / limit));
                     }
-                } else {
-                    // Key IS held.
-                    // If we were in grace period (letGoTime set), we recovered!
-                    note.letGoTime = null;
-                }
-            } else if (note.type === 'roll') {
-                // Roll logic: check time since last press
-                const limit = 0.5; // 500ms roll window
-                const timeDiff = currentTime - note.lastPressTime;
-
-                if (timeDiff > limit) {
-                    note.holdState = 'ng';
-                    triggerHoldJudgement(note, false);
-                } else {
-                    // Roll Transparency Feedback (Fade as it gets closer to dying)
-                    // timeDiff 0 -> 1.0 opacity
-                    // timeDiff 0.5 -> 0.0 opacity (or minimal visible)
-                    // Let's keep min opacity 0.3 so it's visible.
-                    // Formula: 1 - (timeDiff / limit)
-                    // We need to pass this alpha to the draw function? 
-                    // The draw function below (drawImage) uses globalAlpha?
-                    // We need to set a custom property on the note for the draw routine to read?
-                    // Or verify if we are drawing the BODY here or later?
-                    // This loop iterates visibleNotes but doesn't DRAW them yet.
-                    // The drawing happens in a separate loop? No.
-                    // Wait, `visibleNotes.forEach` block IS processing. where is drawing?
-
-                    // Ah, this block (3206) is "Process & Draw Visible Notes" but I don't see drawImage calls for Body here.
-                    // Let me check further down.
-                    note.rollAlpha = Math.max(0.2, 1 - (timeDiff / limit));
                 }
             }
-        }
 
-        if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') return;
+            if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') return;
 
-        // Cleanup Missed Holds that have passed
-        if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) { // +0.5 buffer
-            note.processed = true;
-            return;
-        }
-
-        const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-
-        const timeDiff = note.time - currentTime;
-
-        // Mine Logic - Scale Window
-        if (note.type === 'mine' && !note.processed) {
-            // Convert to Real Time MS
-            const realMsDiff = (timeDiff * 1000) / rate;
-
-            if (Math.abs(realMsDiff) <= J_MINE_WINDOW) {
-                if (gameState.heldKeys[note.col] && !gameState.isAutoplay) {
-                    // Pass Song Time MS or Real Time MS appropriately? 
-                    // triggerJudgement usually takes pure offset.
-                    // Mines use a simplified trigger? 
-                    // Original passed msDiff (Song Time). 
-                    // But triggerJudgement uses it for stats? 
-                    // Let's pass Real Time MS for consistency.
-                    triggerJudgement(note, realMsDiff, false);
-                }
-            }
-            // Use Scaled Expiry for Mines too?
-            // If passed mine completely.
-            // Original: msDiff < -J_MINE_WINDOW
-            if (realMsDiff < -J_MINE_WINDOW) { note.processed = true; return; }
-        }
-
-        // AUTO PLAY LOGIC
-        if (gameState.isAutoplay && !note.processed && !note.hit && note.type !== 'mine') {
-            if (timeDiff <= 0) { // Exact time or passed
-                note.hit = true;
-                gameState.heldKeys[note.col] = true; // Visual feedback
-                triggerJudgement(note, 0, false);
-
-                // For Holds/Rolls
-                if (note.type === 'hold' || note.type === 'roll') {
-                    note.holdState = 'active';
-                } else {
-                    // Tap note: release key quickly
-                    setTimeout(() => gameState.heldKeys[note.col] = false, 50);
-                }
+            // Cleanup Missed Holds that have passed
+            if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) { // +0.5 buffer
+                note.processed = true;
                 return;
             }
-        }
 
-        // Autoplay Hold Release
-        if (gameState.isAutoplay && (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-            gameState.heldKeys[note.col] = true; // Keep holding
-            if (currentTime >= note.endTime) {
-                gameState.heldKeys[note.col] = false; // Release
+            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+
+            const timeDiff = note.time - currentTime;
+
+            // Mine Logic - Scale Window
+            if (note.type === 'mine' && !note.processed) {
+                // Convert to Real Time MS
+                const realMsDiff = (timeDiff * 1000) / rate;
+
+                if (Math.abs(realMsDiff) <= J_MINE_WINDOW) {
+                    if (gameState.heldKeys[note.col] && !gameState.isAutoplay) {
+                        // Pass Song Time MS or Real Time MS appropriately? 
+                        // triggerJudgement usually takes pure offset.
+                        // Mines use a simplified trigger? 
+                        // Original passed msDiff (Song Time). 
+                        // But triggerJudgement uses it for stats? 
+                        // Let's pass Real Time MS for consistency.
+                        triggerJudgement(note, realMsDiff, false);
+                    }
+                }
+                // Use Scaled Expiry for Mines too?
+                // If passed mine completely.
+                // Original: msDiff < -J_MINE_WINDOW
+                if (realMsDiff < -J_MINE_WINDOW) { note.processed = true; return; }
             }
+
+            // AUTO PLAY LOGIC
+            if (gameState.isAutoplay && !note.processed && !note.hit && note.type !== 'mine') {
+                if (timeDiff <= 0) { // Exact time or passed
+                    note.hit = true;
+                    gameState.heldKeys[note.col] = true; // Visual feedback
+                    triggerJudgement(note, 0, false);
+
+                    // For Holds/Rolls
+                    if (note.type === 'hold' || note.type === 'roll') {
+                        note.holdState = 'active';
+                    } else {
+                        // Tap note: release key quickly
+                        setTimeout(() => gameState.heldKeys[note.col] = false, 50);
+                    }
+                    return;
+                }
+            }
+
+            // Autoplay Hold Release
+            if (gameState.isAutoplay && (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+                gameState.heldKeys[note.col] = true; // Keep holding
+                if (currentTime >= note.endTime) {
+                    gameState.heldKeys[note.col] = false; // Release
+                }
+            }
+
+            // MISS CHECK - Scale Window by Rate
+            // If window is 180ms real time, that's (180/1000)*rate seconds in song time.
+            // If timeDiff (Song Time) < -WindowSongTime, then we missed.
+            if (timeDiff < -((J_MISS_WINDOW / 1000) * rate) && !note.hit && note.type !== 'mine' && note.holdState === 'inactive') {
+                note.processed = true;
+                triggerJudgement(note, J_MISS_WINDOW + 1, true);
+                return;
+            }
+            let y;
+            if (userConfig.downScroll) y = gameConfig.receptorY - (timeDiff * gameConfig.scrollSpeed);
+            else y = gameConfig.receptorY + (timeDiff * gameConfig.scrollSpeed);
+
+            // Visibility Check: Account for Tail (minY to maxY)
+            let noteTop = y;
+            let noteBottom = y;
+
+            if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
+                const duration = note.endTime - note.time;
+                const dist = duration * gameConfig.scrollSpeed;
+                let tailY;
+                if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist;
+
+                noteTop = Math.min(y, tailY);
+                noteBottom = Math.max(y, tailY);
+            }
+
+            // Add buffer (1000px)
+            if (noteBottom > -1000 && noteTop < canvas.height + 1000) {
+                drawNote(note, y, rotations[note.col]);
+            }
+        });
+
+        drawErrorBar();
+        drawNPSGraph();
+
+        // Cache totalTime to avoid repeated array access
+        if (!gameState.cachedTotalTime) {
+            gameState.cachedTotalTime = gameState.notes[gameState.notes.length - 1].time;
+        }
+        const totalTime = gameState.cachedTotalTime;
+
+        // Throttle Progress Bar & Time Updates (every 500ms to reduce DOM manipulation)
+        if (!gameState.lastTimeUpdate || now - gameState.lastTimeUpdate > 500) {
+            // Progress bar uses Song Time %
+            const prog = Math.min(100, Math.max(0, (currentTime / totalTime) * 100));
+            const progEl = document.getElementById('progress-bar');
+            if (progEl) progEl.style.width = prog + "%";
+
+            // Update time display
+            const formatTime = (t) => {
+                t = Math.max(0, t);
+                const m = Math.floor(t / 60);
+                const s = Math.floor(t % 60).toString().padStart(2, '0');
+                return `${m}:${s} `;
+            };
+
+            setText('time-elapsed', formatTime(currentTime / rate));
+            setText('time-total', formatTime(totalTime / rate));
+            gameState.lastTimeUpdate = now;
         }
 
-        // MISS CHECK - Scale Window by Rate
-        // If window is 180ms real time, that's (180/1000)*rate seconds in song time.
-        // If timeDiff (Song Time) < -WindowSongTime, then we missed.
-        if (timeDiff < -((J_MISS_WINDOW / 1000) * rate) && !note.hit && note.type !== 'mine' && note.holdState === 'inactive') {
-            note.processed = true;
-            triggerJudgement(note, J_MISS_WINDOW + 1, true);
-            return;
-        }
-        let y;
-        if (userConfig.downScroll) y = gameConfig.receptorY - (timeDiff * gameConfig.scrollSpeed);
-        else y = gameConfig.receptorY + (timeDiff * gameConfig.scrollSpeed);
+    } // End main game logic block
 
-        // Visibility Check: Account for Tail (minY to maxY)
-        let noteTop = y;
-        let noteBottom = y;
-
-        if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
-            const duration = note.endTime - note.time;
-            const dist = duration * gameConfig.scrollSpeed;
-            let tailY;
-            if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist;
-
-            noteTop = Math.min(y, tailY);
-            noteBottom = Math.max(y, tailY);
-        }
-
-        // Add buffer (1000px)
-        if (noteBottom > -1000 && noteTop < canvas.height + 1000) {
-            const rowIndex = getNoteRowIndex(note.beat);
-            let rot = assets.loaded.arrowSprite ? spriteRotations[note.col] : vectorRotations[note.col];
-            drawNote(note, y, rot);
-        }
-    });
-
-    drawErrorBar();
-    drawNPSGraph();
-
-    // Progress Bar & Time
-    const totalTime = gameState.notes[gameState.notes.length - 1].time;
-    // Progress bar uses Song Time % (unchanged, as both scale)
-    const prog = Math.min(100, Math.max(0, (currentTime / totalTime) * 100));
-    const progEl = document.getElementById('progress-bar');
-    if (progEl) progEl.style.width = prog + "%";
-
-    // Rate for Time String Scaling: Use outer 'rate' variable
-    // const rate = ... (already defined in gameLoop scope)
-
-    // Time Strings (Show Real Time)
-    const formatTime = (t) => {
-        t = Math.max(0, t);
-        const m = Math.floor(t / 60);
-        const s = Math.floor(t % 60).toString().padStart(2, '0');
-        return `${m}:${s} `;
-    };
-
-    // Throttle Time Updates (e.g. every 500ms or 1s, or just check changed string)
-    // Actually, checking string change in setText handles the DOM part.
-    // But we can avoid the math and template string creation too.
-
-    if (!gameState.lastTimeUpdate || now - gameState.lastTimeUpdate > 500) {
-        setText('time-elapsed', formatTime(currentTime / rate));
-        setText('time-total', formatTime(totalTime / rate));
-        gameState.lastTimeUpdate = now;
-    }
-
+    // Use requestAnimationFrame for smooth, consistent frame timing
+    // RAF syncs to your display's refresh rate (60Hz, 144Hz, 240Hz, etc.)
     requestAnimationFrame(gameLoop);
 }
 
@@ -4524,6 +4592,12 @@ function handleInput(e) {
 
 function processInput(colIndex, type, currentTime, rate) {
     if (type === 'down') {
+        // Check if this column needs a fresh press (e.g., after a hold ended with key still held)
+        if (gameState.needsRelease && gameState.needsRelease[colIndex]) {
+            // Ignore this input - we need a key release first
+            return;
+        }
+
         gameState.heldKeys[colIndex] = true;
 
         // Optimization: Find active roll to start holding
@@ -4573,6 +4647,11 @@ function processInput(colIndex, type, currentTime, rate) {
     } else {
         // type === 'up'
         gameState.heldKeys[colIndex] = false;
+
+        // Clear the needsRelease flag when key is released
+        if (gameState.needsRelease && gameState.needsRelease[colIndex]) {
+            gameState.needsRelease[colIndex] = false;
+        }
     }
 }
 
@@ -4704,7 +4783,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     }
     const accLabel = document.querySelector('.acc-box .label');
     if (accLabel) accLabel.style.display = 'none';
-    setText('hit-mean', 'Mean: 0.00ms');
+    setText('hit-mean', '0.00ms');
     setText('hud-title', meta.title);
     setText('hud-artist', meta.artist);
 
@@ -5907,11 +5986,15 @@ function renderFullLeaderboard() {
         const rateVal = (entry.rate || 1.0).toFixed(2);
         const rateHtml = `<span style="font-size:0.8rem; color:#aaa; margin-left:8px; border:1px solid #444; padding:1px 4px; border-radius:3px;">${rateVal}x</span>`;
 
-        // Buttons
+        // Buttons (Consistent Styling)
         const hasReplay = entry.replayLog && entry.replayLog.length > 0;
-        const btnStyle = "background:#333; color:#fff; border:1px solid #555; padding:2px 6px; border-radius:3px; cursor:pointer; font-size:0.7em; margin-left:5px;";
-        const resBtn = `<button onclick='viewScoreResults(${JSON.stringify(entry)})' style='${btnStyle}'>📄 Results</button>`;
-        const repBtn = hasReplay ? `<button onclick='startReplay(${JSON.stringify(entry)}, songLibrary[${selectedSongIndex}], songLibrary[${selectedSongIndex}].charts[${selectedChartIndex}])' style='${btnStyle} color:#00e5ff; border-color:#00e5ff;'>▶ Replay</button>` : "";
+        const baseBtnStyle = "padding:4px 10px; border-radius:4px; font-size:0.75rem; font-weight:600; cursor:pointer; transition:all 0.2s ease; border:none; margin-left:8px; display:inline-flex; align-items:center; gap:5px;";
+
+        const resBtnStyle = `${baseBtnStyle} background:rgba(255,255,255,0.1); color:#fff; box-shadow:0 2px 5px rgba(0,0,0,0.2);`;
+        const repBtnStyle = `${baseBtnStyle} background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; box-shadow:0 2px 8px rgba(102, 126, 234, 0.4);`;
+
+        const resBtn = `<button onclick='viewScoreResults(${JSON.stringify(entry)})' style='${resBtnStyle}' onmouseenter="this.style.background='rgba(255,255,255,0.2)'" onmouseleave="this.style.background='rgba(255,255,255,0.1)'">📄 Results</button>`;
+        const repBtn = hasReplay ? `<button onclick='startReplay(${JSON.stringify(entry)}, songLibrary[${selectedSongIndex}], songLibrary[${selectedSongIndex}].charts[${selectedChartIndex}])' style='${repBtnStyle}' onmouseenter="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(102, 126, 234, 0.6)';" onmouseleave="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 8px rgba(102, 126, 234, 0.4)';">▶ Replay</button>` : "";
 
         div.innerHTML = `
             <div class="ss-lb-main-row">
@@ -6199,14 +6282,14 @@ function previewLoop() {
     // Dynamic Receptor Placement
     // userConfig should be available globally
     const isDownScroll = userConfig.downScroll;
-    const receptorY = isDownScroll ? height - 50 : 10;
+    const receptorY = isDownScroll ? height - 35 : 10;
 
     // Note: scrolling UP means earlier notes are at bottom? No, standard upscroll: notes come from bottom, receptor at top.
 
     // Check asset readiness (using main game assets)
     const canUseSkin = assets.loaded.arrowSprite && assets.loaded.receptorSprite;
 
-    const laneWidth = 40;
+    const laneWidth = 25;
     const totalWidth = laneWidth * 4;
     const startX = (width - totalWidth) / 2;
 
@@ -6245,40 +6328,74 @@ function previewLoop() {
 
     const colors = ['#f55', '#55f', '#5f5', '#ff5']; // L D U R
 
+    // Helper for Quantization (Local to preview or global?)
+    // Uses constant QUANTIZATION_ROWS defined at top of file
+    const getQuantizationRow = (beat) => {
+        // Standard SM quantization: 4, 8, 12, 16, 24, 32, 48, 64
+        // We check simpler common ones first
+        const b = Math.abs(beat);
+        const epsilon = 0.001; // Tolerance
+
+        // 4th (Red)
+        if (Math.abs(b % 1) < epsilon) return QUANTIZATION_ROWS[4];
+        // 8th (Blue)
+        if (Math.abs((b * 2) % 1) < epsilon) return QUANTIZATION_ROWS[8];
+        // 12th (Purple) - Triplet 8th
+        if (Math.abs((b * 3) % 1) < epsilon) return QUANTIZATION_ROWS[12];
+        // 16th (Yellow)
+        if (Math.abs((b * 4) % 1) < epsilon) return QUANTIZATION_ROWS[16];
+        // 24th (Pink) - Triplet 16th
+        if (Math.abs((b * 6) % 1) < epsilon) return QUANTIZATION_ROWS[24];
+        // 32nd (Orange/Cyan)
+        if (Math.abs((b * 8) % 1) < epsilon) return QUANTIZATION_ROWS[32];
+        // 48th
+        if (Math.abs((b * 12) % 1) < epsilon) return QUANTIZATION_ROWS[48];
+        // 64th (Green)
+        if (Math.abs((b * 16) % 1) < epsilon) return QUANTIZATION_ROWS[64];
+
+        // Fallback to 64th or 4th? 64th usually for "unsnapped"
+        return QUANTIZATION_ROWS[64];
+    };
+
     for (const note of previewChartData) {
         const diff = note.time - time;
-        if (diff < -0.5 || diff > 2.0) continue; // optimization
+        // Optimization: Don't render if too far away
+        if (diff > 2.0) continue;
+
+        // HIDING LOGIC: Don't render if it has passed the receptor (diff <= 0)
+        // For Holds/Rolls, we might need to render the tail/body even if head is passed.
+        // Taps/Mines:
+        if ((note.type === 'tap' || note.type === 'mine') && diff <= 0) continue;
 
         // Calc Y based on scroll direction
-        // Downscroll: Notes fall DOWN to receptor (Y increases as diff decreases? Wait. Diff = noteTime - time)
-        // Future note (diff > 0):
-        // Upscroll: Note is BELOW receptor (Y > receptorY). Y = receptorY + diff * speed
-        // Downscroll: Note is ABOVE receptor (Y < receptorY). Y = receptorY - diff * speed
-
-        // Let's verify standard direction logic
-        // Standard (Upscroll): Receptor at Top (50). Future Note at 1s (diff=1). Y should be 50 + 400 = 450. Correct.
-        // Downscroll: Receptor at Bottom (600). Future Note at 1s (diff=1). Y should be 600 - 400 = 200. Correct.
-
         const y = isDownScroll ? receptorY - (diff * speed) : receptorY + (diff * speed);
 
-        if (y > height + 60 || y < -60) continue; // Buffer
+        // Clip/Buffer off-screen
+        // If y is way off screen, skip. 
+        // Note: For holds, y is the HEAD position. The body might extend onto screen.
+        // So we need separate checks for holds.
+        if (note.type !== 'hold' && note.type !== 'roll') {
+            if (y > height + 60 || y < -60) continue;
+        }
 
         const x = startX + note.col * laneWidth;
 
         // Draw Logic
         if (note.type === 'tap') {
             if (canUseSkin) {
-                // Draw Image
                 const size = laneWidth;
                 previewCtx.save();
                 previewCtx.translate(x + size / 2, y + size / 2);
                 previewCtx.rotate(rotations[note.col]);
-                // Frame 0 of 8 (1/8th height)
+
+                // Quantization
+                const row = getQuantizationRow(note.beat);
+                const frameRows = 8; // Assuming 1x8 sprite
                 const sw = assets.arrowSprite.width;
-                const sh = assets.arrowSprite.height / 8;
-                // Ensure no stretch? If sw != sh, standard behavior is usually to fit sq?
-                // SM notes are square.
-                previewCtx.drawImage(assets.arrowSprite, 0, 0, sw, sh, -size / 2, -size / 2, size, size);
+                const sh = assets.arrowSprite.height / frameRows;
+                const sy = row * sh;
+
+                previewCtx.drawImage(assets.arrowSprite, 0, sy, sw, sh, -size / 2, -size / 2, size, size);
                 previewCtx.restore();
             } else {
                 previewCtx.fillStyle = colors[note.col];
@@ -6301,22 +6418,21 @@ function previewLoop() {
             }
         }
         else if (note.type === 'hold' || note.type === 'roll') {
-            // Logic similar to tap but with body
-            // We need endTime or length
-            // note.endTime is populated in parser? Yes.
-            // If active hold, we might need special handling, but for preview we can just draw based on times
-
             if (note.endTime) {
                 const tailDiff = note.endTime - time;
-                const headDiff = diff;
+                const headDiff = diff; // note.time - time
+
+                // If tail is passed (tailDiff <= 0), don't draw anything
+                if (tailDiff <= 0) continue;
+
+                // Visual Start Time (clipped to "now" if started)
+                const visualHeadDiff = Math.max(0, headDiff);
 
                 // Calc Ys
-                const headY = isDownScroll ? receptorY - (headDiff * speed) : receptorY + (headDiff * speed);
+                // Start Y (Head or Receptor if held)
+                const headY = isDownScroll ? receptorY - (visualHeadDiff * speed) : receptorY + (visualHeadDiff * speed);
+                // End Y (Tail)
                 const tailY = isDownScroll ? receptorY - (tailDiff * speed) : receptorY + (tailDiff * speed);
-
-                // Length geometry:
-                // Upscroll: Head is at headY (e.g. 450), Tail is at tailY (e.g. 850). Body is from 450 to 850.
-                // Downscroll: Head is at headY (e.g. 200), Tail is at tailY (e.g. -200). Body is from -200 to 200.
 
                 let topY, bottomY;
                 if (isDownScroll) {
@@ -6327,37 +6443,107 @@ function previewLoop() {
                     bottomY = tailY;
                 }
 
-                // Draw Body
+                // Off-screen check for body
+                if (bottomY < -60 || topY > height + 60) continue;
+
+                // Draw Body (Tiled)
                 if (canUseSkin && assets.loaded.holdBody) {
                     const bodyImg = note.type === 'roll' && assets.loaded.rollBody ? assets.rollBody : assets.holdBody;
-                    const bw = laneWidth; // Body width usually slightly smaller?
-                    const bh = bottomY - topY; // Length
+                    const bw = laneWidth;
 
-                    if (bh > 0) {
-                        // Tiling or stretching? SM usually stretches or tiles. Let's stretch for simplicity in preview
-                        previewCtx.drawImage(bodyImg, x, topY, bw, bh);
+                    // We need to tile the texture from the HEAD (visual start) to the TAIL
+                    // But effectively we fill the rect (x, topY, bw, bottomY - topY)
+                    // With a texture that repeats. 
+                    // To avoid "sliding" texture when the note moves, we should align the pattern to the NOTE's start, not the screen.
+                    // However, standard SM holds often just tile within the quad.
+                    // If we tile relative to screen, it looks like a window. 
+                    // We want the texture to move with the note.
+                    // So we must offset the pattern or draw manually.
+
+                    // Let's loop manually.
+                    const bodyLen = bottomY - topY;
+                    const imgH = bodyImg.height;
+                    const imgW = bodyImg.width;
+
+                    if (bodyLen > 0) {
+                        previewCtx.save();
+                        // Clip to body area
+                        previewCtx.beginPath();
+                        previewCtx.rect(x, topY, bw, bodyLen);
+                        previewCtx.clip();
+
+                        // Upscroll: Texture starts at bottomY (Tail)? No, usually Top (Head) for Upscroll?
+                        // Actually, SM textures: "Down Hold Body" implies it's designed for Downscroll or generic?
+                        // Usually 64x64 or similar.
+                        // We want the texture anchored to the NOTE HEAD (which is at headY or receptorY if held).
+                        // Note Head Position (Real):
+                        const realHeadY = isDownScroll ? receptorY - (headDiff * speed) : receptorY + (headDiff * speed);
+
+                        // We want to tile starting from `realHeadY` downwards (or upwards).
+                        // Let's just tile from topY to bottomY, but shift the phase by `topY`?
+                        // No, if we want it to stick to the note, phase should be based on `realHeadY`.
+
+
+
+                        // Tiling Logic: Anchor to realHeadY to prevent sliding
+                        const startK = Math.floor((topY - realHeadY) / imgH);
+                        // Limit loop to avoid infinite freeze
+                        const maxTiles = Math.ceil((bottomY - topY) / imgH) + 2;
+
+                        for (let k = startK; k < startK + maxTiles; k++) {
+                            const tileY = realHeadY + k * imgH;
+                            if (tileY >= bottomY) break;
+                            if (tileY + imgH <= topY) continue; // Fully above topY
+
+                            // Clip top/bottom
+                            // Standard drawImage allows source/dest mismatch (scaling), but we want Clipping.
+                            // If we draw full size at tileY, and tileY < topY, the top part is drawn outside expected area.
+                            // BUT we have `previewCtx.clip()` active! 
+                            // So we can simply draw the FULL tile at `tileY` and let the clip rect (topY..bottomY) handle it.
+                            previewCtx.drawImage(bodyImg, 0, 0, imgW, imgH, x, tileY, bw, imgH);
+                        }
+
+                        previewCtx.restore();
                     }
 
                     // Cap (Head) - Draw ON TOP of body
-                    const size = laneWidth;
-                    previewCtx.save();
-                    previewCtx.translate(x + size / 2, headY + size / 2); // Head always at headY
-                    previewCtx.rotate(rotations[note.col]);
+                    // HIDING LOGIC: Only draw head if visualHeadDiff > 0 (not passed)
+                    if (headDiff > 0) {
+                        const size = laneWidth;
+                        previewCtx.save();
+                        // Head is always at headY (which is topY or bottomY depending on scroll)
+                        // Upscroll: headY is topY. Downscroll: headY is bottomY?
+                        // My variable: headY calculated from visualHeadDiff.
 
-                    // Head sprite: assuming active hold head or tap note? 
-                    // Usually "Hold Head Active" or just Tap Note. 
-                    const headImg = assets.loaded.holdHeadActive ? assets.holdHeadActive : assets.arrowSprite;
-                    // Frame 0
-                    const hsw = headImg.width;
-                    const hsh = headImg === assets.arrowSprite ? headImg.height / 8 : headImg.height; // Single frame or atlas?
-                    // Verify "Down Hold Active 1x8.png" -> 8 frames
-                    const srcH = headImg.src.includes('1x8') ? headImg.height / 8 : headImg.height;
+                        previewCtx.translate(x + size / 2, headY + size / 2);
+                        previewCtx.rotate(rotations[note.col]);
 
-                    previewCtx.drawImage(headImg, 0, 0, hsw, srcH, -size / 2, -size / 2, size, size);
+                        const headImg = assets.loaded.holdHeadActive ? assets.holdHeadActive : assets.arrowSprite;
 
-                    previewCtx.restore();
+                        // Quantization for Hold Head?
+                        // Usually Holds use a specific "Hold Head" sprite which might be quantized or might be single frame.
+                        // Standard "Down Hold Active 1x8.png" suggests quantization support!
+                        // Let's apply quantization to hold head too.
+
+                        const row = getQuantizationRow(note.beat);
+                        // Check if headImg has frames. 
+                        // If it's "1x8" in name or we assume it is the arrow sprite.
+                        // Safest: Check aspect ratio?
+                        // If height >> width, assume frames.
+                        let sy = 0;
+                        let sh = headImg.height;
+                        if (headImg.height >= headImg.width * 4) { // Heuristic: at least 4 frames
+                            sh = headImg.height / 8;
+                            sy = row * sh;
+                        }
+
+                        const hsw = headImg.width;
+                        previewCtx.drawImage(headImg, 0, sy, hsw, sh, -size / 2, -size / 2, size, size);
+                        previewCtx.restore();
+                    }
 
                 } else {
+                    // Fallback
                     previewCtx.fillStyle = 'rgba(200, 200, 200, 0.5)';
                     previewCtx.fillRect(x + 5, topY, laneWidth - 10, bottomY - topY);
                 }
