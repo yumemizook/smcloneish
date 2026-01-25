@@ -777,6 +777,12 @@ function sortLibrary() {
     const rest = songLibrary.slice(1);
 
     rest.sort((a, b) => {
+        // 1. Prioritize songs without missing data (warning icon)
+        const warnA = !a.audioBlob;
+        const warnB = !b.audioBlob;
+        if (warnA !== warnB) return warnA ? 1 : -1;
+
+        // 2. Alphabetical A-Z
         const tA = (a.meta.title || "").toUpperCase();
         const tB = (b.meta.title || "").toUpperCase();
         if (tA < tB) return -1;
@@ -2297,7 +2303,7 @@ function triggerFail() {
     }, 2500); // 2s fade + 0.5s hold
 }
 
-function triggerJudgement(note, offsetMs, isMiss = false) {
+function triggerJudgement(note, offsetMs, isMiss = false, currentTime) {
     if (gameState.failed) return;
     const absOffset = Math.abs(offsetMs);
     let judgeText = ""; let judgeClass = ""; let breaksCombo = false; let scoreAdd = 0; let lifeChange = 0;
@@ -2311,8 +2317,10 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
     const gainMult = Math.max(0.1, 1.0 - (lifeDiff - 4) * 0.1);
 
     if (!isMiss && note.type !== 'mine') {
+        gameState.hitSum += offsetMs;
+        gameState.hitCount++;
         gameState.hitOffsets.push(offsetMs);
-        gameState.recentHits.push({ offset: offsetMs, time: Date.now() });
+        gameState.recentHits.push({ offset: offsetMs, time: currentTime * 1000 });
 
         // Sync Mode: Real-time accumulation
         if (window.isSyncMode) {
@@ -2336,7 +2344,7 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
                     mean: mean,
                     sd: sd,
                     valid: isValid,
-                    time: Date.now()
+                    time: currentTime * 1000
                 });
 
                 window.syncBatch = []; // Clear for next batch
@@ -2465,14 +2473,14 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         } else if (!isMiss) { note.processed = true; }
 
         gameState.detailedHits.push({
-            time: audioCtx.currentTime - gameState.startTime,
+            time: currentTime,
             offset: isMiss ? null : offsetMs,
             judge: judgeText
         });
     }
 
     const currentAcc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / gameState.totalNotesHitOrMissed) : 100;
-    gameState.accuracyHistory.push({ time: (audioCtx.currentTime - gameState.startTime), acc: currentAcc, grade: getGrade(currentAcc) });
+    gameState.accuracyHistory.push({ time: currentTime, acc: currentAcc, grade: getGrade(currentAcc) });
 
     if (breaksCombo) gameState.combo = 0; else if (note.type !== 'mine') gameState.combo++;
     if (gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
@@ -2505,8 +2513,8 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         if (gameState.life <= 0) triggerFail();
     }
 
-    gameState.lifeHistory.push({ time: audioCtx.currentTime - gameState.startTime, val: gameState.life });
-    gameState.comboHistory.push({ time: audioCtx.currentTime - gameState.startTime, val: gameState.combo });
+    gameState.lifeHistory.push({ time: currentTime, val: gameState.life });
+    gameState.comboHistory.push({ time: currentTime, val: gameState.combo });
 
     const jEl = document.getElementById('judgment');
     if (jEl) {
@@ -2587,11 +2595,15 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 
         saveScore();
         if (gameState.failed) showResults();
-        else setTimeout(showResults, 2000);
+        else setTimeout(() => {
+            // Need to pass currentTime if showResults needed it?
+            // Usually results screen is static.
+            showResults();
+        }, 2000);
     }
 }
 
-function triggerHoldJudgement(note, isOK) {
+function triggerHoldJudgement(note, isOK, currentTime) {
     if (gameState.failed) return;
     if (isOK) {
         // Hold OK: Successful hold end.
@@ -3330,26 +3342,55 @@ function viewScoreResults(entry) {
 
     showResults();
 } window.viewScoreResults = viewScoreResults;
+
 function drawReceptor(x, y, rotation, colIndex) {
-    ctx.save(); const halfSize = gameConfig.columnWidth / 2; ctx.translate(x + halfSize, y + halfSize); ctx.rotate(rotation * Math.PI / 180); const drawSize = gameConfig.arrowSize; const offset = -drawSize / 2; if (assets.loaded.receptorSprite) { const img = assets.receptorSprite; const sx = gameState.heldKeys[colIndex] ? img.width / 2 : 0; ctx.drawImage(img, sx, 0, img.width / 2, img.height, offset, offset, drawSize, drawSize); } else { ctx.beginPath(); const s = drawSize / 2.5; ctx.strokeStyle = gameState.heldKeys[colIndex] ? '#fff' : '#aaa'; ctx.lineWidth = 4; ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(s / 2, 0); ctx.lineTo(s / 2, s); ctx.lineTo(-s / 2, s); ctx.lineTo(-s / 2, 0); ctx.lineTo(-s, 0); ctx.closePath(); ctx.stroke(); }
-
-    // Optimization: Check only visible range or usage caching. For now, using a specialized search in a small window is better than O(N).
-    // Or simpler: We can iterate active notes in the game loop and flag check.
-    // Let's use the optimized loop in gameLoop to populate 'activeHoldCols' for this frame.
-    // Fallback: If colsActive is undefined (first frame?), use default false.
-    const isHoldingActive = gameState.colsActive && gameState.colsActive[colIndex];
-
-    if (isHoldingActive && assets.loaded.holdExplosion) {
-        const expImg = assets.holdExplosion;
-        const frame = Math.floor(Date.now() / 50) % 2;
-        const fw = expImg.width / 2;
-        // Fix: Use drawSize (receptor size) to ensure it matches width
-        ctx.drawImage(expImg, frame * fw, 0, fw, expImg.height, offset, offset, drawSize, drawSize);
+    ctx.save();
+    const halfSize = gameConfig.columnWidth / 2;
+    ctx.translate(x + halfSize, y + halfSize);
+    ctx.rotate(rotation * Math.PI / 180);
+    const drawSize = gameConfig.arrowSize;
+    const offset = -drawSize / 2;
+    if (assets.loaded.receptorSprite) {
+        const img = assets.receptorSprite;
+        const sx = gameState.heldKeys[colIndex] ? img.width / 2 : 0;
+        ctx.drawImage(img, sx, 0, img.width / 2, img.height, offset, offset, drawSize, drawSize);
+    } else {
+        ctx.beginPath();
+        const s = drawSize / 2.5;
+        ctx.strokeStyle = gameState.heldKeys[colIndex] ? '#fff' : '#aaa';
+        ctx.lineWidth = 4;
+        ctx.moveTo(0, -s);
+        ctx.lineTo(s, 0);
+        ctx.lineTo(s / 2, 0);
+        ctx.lineTo(s / 2, s);
+        ctx.lineTo(-s / 2, s);
+        ctx.lineTo(-s / 2, 0);
+        ctx.lineTo(-s, 0);
+        ctx.closePath();
+        ctx.stroke();
     }
     ctx.restore();
 }
+function drawHoldExplosion(x, y, rotation, colIndex, currentTime) {
+    const isHoldingActive = gameState.colsActive && gameState.colsActive[colIndex];
+    if (isHoldingActive && assets.loaded.holdExplosion) {
+        ctx.save();
+        const halfSize = gameConfig.columnWidth / 2;
+        ctx.translate(x + halfSize, y + halfSize);
+        ctx.rotate(rotation * Math.PI / 180);
+        const drawSize = gameConfig.arrowSize;
+        const offset = -drawSize / 2;
+
+        const expImg = assets.holdExplosion;
+        const frame = Math.floor((currentTime * 1000) / 50) % 2;
+        const fw = expImg.width / 2;
+        ctx.drawImage(expImg, frame * fw, 0, fw, expImg.height, offset, offset, drawSize, drawSize);
+        ctx.restore();
+    }
+}
+
 // Refactored drawNote with Alpha Fade & Alignment & Modifiers
-function drawNote(note, y, rotation) {
+function drawNote(note, y, rotation, currentTime) {
     // --- MODIFIERS: EFFECT & APPEARANCE ---
     let drawX = note.col * gameConfig.columnWidth;
     let drawY = y;
@@ -3359,14 +3400,7 @@ function drawNote(note, y, rotation) {
     // OR Sync Mode enforced fade (TIME-BASED, not note-based)
     let enforceSyncFade = false;
     if (window.isSyncMode && typeof gameState !== 'undefined' && gameState.startTime) {
-        // Get current song time
-        const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-        let songTime = 0;
-        if (gameState.mode === 'stretch' && gameState.audioEl) {
-            songTime = gameState.audioEl.currentTime;
-        } else if (audioCtx) {
-            songTime = (audioCtx.currentTime - gameState.startTime) * rate;
-        }
+        let songTime = currentTime;
 
         // Fade starts after 4 seconds of song time
         // At 4s: alpha = 1, at 8s: alpha = 0
@@ -3407,9 +3441,7 @@ function drawNote(note, y, rotation) {
     // 2. Effects (Drunk, etc)
     if (modConfig.effect && modConfig.effect.name !== 'none') {
         const eff = modConfig.effect.name;
-        // Time based: currentSongTime (beat would be better)
-        // We need audioCtx time.
-        const time = audioCtx ? (audioCtx.currentTime - gameState.startTime) : 0;
+        const time = currentTime;
 
         if (eff === 'drunk') {
             // Sine wave on X
@@ -3455,114 +3487,39 @@ function drawNote(note, y, rotation) {
         // Easier: adjust drawSize.
     }
 
-    // --- HOLD/ROLL BODY DRAWING ---
+    // --- COORDINATE CALCULATIONS ---
+    const drawSize = gameConfig.arrowSize;
+    const offset = -drawSize / 2;
+
+    // Visual head position
+    let headVisualY = y;
+    if (note.holdState === 'active') {
+        headVisualY = gameConfig.receptorY;
+    }
+
+    // Visual body start/end
+    let bodyStartVisualY = y;
+    let bodyEndVisualY = y;
     if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
-        let tailY;
         const duration = note.endTime - note.time;
-        // Need to account for potential rate mod logic if scrollSpeed is constant time?
-        // gameConfig.scrollSpeed is pixels/sec. 
-        let dist = duration * gameConfig.scrollSpeed;
-        if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist;
+        const dist = duration * gameConfig.scrollSpeed;
+        if (userConfig.downScroll) bodyEndVisualY = y - dist; else bodyEndVisualY = y + dist;
 
-        let drawHeadY = y;
-        let drawTailY = tailY;
-
-        // Lock Head to Receptor if Active
+        // If active, the visual "start" of the body is locked at the receptor's middle
         if (note.holdState === 'active') {
-            drawHeadY = gameConfig.receptorY;
-        }
-        // If missed, drawHeadY remains 'y' (scrolling away) as set above.
-
-        const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody;
-        const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody;
-
-        if (bodyLoaded) {
-            ctx.save();
-
-            // Alpha Fading Logic (Grace Period & Rolls)
-            if (note.letGoTime) {
-                const timeStr = (audioCtx ? audioCtx.currentTime - gameState.startTime : 0) - note.letGoTime;
-                const ms = timeStr * 1000;
-                const graceAlpha = Math.max(0, 1 - (ms / 250));
-                ctx.globalAlpha *= graceAlpha;
-            }
-            // Roll Transparency
-            if (note.rollAlpha !== undefined) {
-                ctx.globalAlpha *= note.rollAlpha;
-            }
-
-            // Dim Missed Holds
-            if (note.holdState === 'missed') {
-                ctx.globalAlpha *= 0.5; // Dim the body
-                // Optional: Gray scale filter? 
-            }
-
-            ctx.beginPath();
-            const w = gameConfig.arrowSize; // * (mini ? 0.5 : 1)
-            const bx = x + (gameConfig.columnWidth - w) / 2;
-
-            // Determine Rect
-            let ry = userConfig.downScroll ? drawTailY : drawHeadY;
-            let rh = Math.abs(drawHeadY - drawTailY);
-
-            // Clip & Draw
-            ctx.rect(bx, ry, w, rh);
-            ctx.clip();
-
-            const scale = w / bodyImg.width;
-            const sHeight = bodyImg.height * scale;
-            const count = Math.ceil(rh / sHeight) + 1;
-
-            // Fix Texture Sliding:
-            // Texture should be anchored to the Note's virtual Y position (y), not the Clipped Y (ry).
-            // ry moves differently when active (locked to receptor).
-            // y moves constantly with scroll.
-            // When y matches ry (missed/inactive), texture matches.
-            // When active, ry is fixed, y moves. We want texture to move (follow tail).
-            // So we offset drawing by (y % sHeight) or similar.
-
-            // We want the "Top" of the image to align with 'y'.
-            // So calculate startY based on 'y'.
-            // We need to cover the area starting at 'ry'.
-            // Find minimal k such that (y + k*sHeight) < ry (or just cover the area).
-
-            // Just drawing from 'y' downwards (or upwards) and letting clip handle it is easiest?
-            // If downscroll: y is top (head). Tail is y - dist. 
-            // We draw usually from Head to Tail (or Tail to Head?).
-            // Let's assume standard texture is Top-Down.
-
-            // We loop k relative to y.
-            // We need to fill range [MinY, MaxY] of the rect.
-            const rectTop = Math.min(drawHeadY, drawTailY);
-            const rectBottom = Math.max(drawHeadY, drawTailY);
-
-            // Calculate offset relative to Y
-            // e.g. We want an image at y, y+h, y+2h...
-            // Find index of first image that overlaps rectTop.
-            // startImageIndex = floor((rectTop - y) / sHeight)
-            const startK = Math.floor((rectTop - y) / sHeight);
-            const endK = Math.ceil((rectBottom - y) / sHeight);
-
-            for (let k = startK; k <= endK; k++) {
-                ctx.drawImage(bodyImg, bx, y + (k * sHeight), w, sHeight);
-            }
-
-            ctx.restore();
+            bodyStartVisualY = gameConfig.receptorY + halfSize;
         }
     }
 
     // --- HEAD DRAWING ---
-    // Use modified x, y, rotation
-    ctx.translate(x + halfSize, y + halfSize);
+    ctx.save();
+    ctx.translate(x + halfSize, headVisualY + halfSize);
     ctx.rotate(rotation * Math.PI / 180);
 
     // Scale for Mini
     if (modConfig.effect && modConfig.effect.name === 'mini') {
         ctx.scale(0.5, 0.5);
     }
-
-    const drawSize = gameConfig.arrowSize;
-    const offset = -drawSize / 2;
 
     if (note.type === 'mine' && assets.loaded.mineSprite) {
         const frames = 8;
@@ -3572,38 +3529,13 @@ function drawNote(note, y, rotation) {
         ctx.drawImage(assets.mineSprite, frame * fw, 0, fw, fh, offset, offset, drawSize, drawSize);
     } else {
         let img = assets.arrowSprite;
-        let rowIndex = getNoteRowIndex(note.beat);
-
-        // Active Head Overriding
         if (note.holdState === 'active' && assets.loaded.holdHeadActive) {
             img = assets.holdHeadActive;
-
-            // Re-lock to Receptor Y if active
-            // Undo Effect Translation? 
-            // If we are active, we are AT the receptor.
-            // Receptor X is fixed (unless Drunk moves receptors too? usually receptors stay put or move with mod).
-            // If mod moves Receptors, we should move.
-            // If mod only moves Arrows (Visual), then when active (at receptor), we should match Receptor visual.
-            // Assuming Receptors NOT transformed for now.
-            // Force Y to ReceptorY. X to Standard Col X? Or Mod X?
-            // If Drunk, Arrow sways. Receptor static. When crossing, arrow should align?
-            // Usually Drunk moves receptors too given "Column" movement.
-            // Let's assume Drunk moves note X only.
-
-            ctx.restore(); // Undo translate/rotate
-            ctx.save();
-            ctx.globalAlpha *= alpha;
-
-            // Recalculate X for Receptor (Static)
-            // Or should we keep Drunk offset?
-            // Let's keep Drunk offset for visual consistency.
-
-            ctx.translate(x + halfSize, gameConfig.receptorY + halfSize);
-            ctx.rotate(rotation * Math.PI / 180);
-            if (modConfig.effect && modConfig.effect.name === 'mini') ctx.scale(0.5, 0.5);
         }
 
-        if (assets.loaded.arrowSprite) {
+        let rowIndex = getNoteRowIndex(note.beat);
+
+        if (assets.loaded.arrowSprite || assets.loaded.holdHeadActive) {
             const sy = rowIndex * (img.height / 8);
             ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize);
         } else {
@@ -3612,9 +3544,97 @@ function drawNote(note, y, rotation) {
         }
     }
     ctx.restore();
+
+    // --- HOLD/ROLL BODY DRAWING --- (Rendered on top of head per request)
+    if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
+        const bodyImg = note.type === 'hold' ? assets.holdBody : assets.rollBody;
+        const bodyLoaded = note.type === 'hold' ? assets.loaded.holdBody : assets.loaded.rollBody;
+
+        if (bodyLoaded) {
+            ctx.save();
+            ctx.globalAlpha *= 0.8; // Ensure head visibility
+
+            if (note.letGoTime) {
+                ctx.globalAlpha *= Math.max(0, 1 - ((currentTime - note.letGoTime) * 1000 / 250));
+            }
+            if (note.rollAlpha !== undefined) ctx.globalAlpha *= note.rollAlpha;
+            if (note.holdState === 'missed') ctx.globalAlpha *= 0.5;
+
+            const w = gameConfig.arrowSize;
+            const bx = x + (gameConfig.columnWidth - w) / 2;
+
+            // Anchor at the scrolling 'y' for pattern consistency
+            // But fill only the visual range [bodyStartVisualY, bodyEndVisualY]
+            ctx.save();
+            ctx.translate(bx, y);
+
+            if (!note.bodyPattern) {
+                note.bodyPattern = ctx.createPattern(bodyImg, 'repeat');
+            }
+            ctx.fillStyle = note.bodyPattern;
+
+            const imgScale = w / bodyImg.width;
+            ctx.scale(imgScale, imgScale);
+
+            // Coordinates in image space
+            const fillStart = (bodyStartVisualY - y) / imgScale;
+            const fillEnd = (bodyEndVisualY - y) / imgScale;
+            const fillHeight = fillEnd - fillStart;
+
+            ctx.fillRect(0, fillStart, bodyImg.width, fillHeight);
+            ctx.restore();
+            ctx.restore();
+        }
+    }
+
+    ctx.restore();
 }
-function drawErrorBar() { const eb = document.getElementById('errorBarCanvas'); if (!eb) return; const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height); const scale = 150 / 180; const now = Date.now(); gameState.recentHits = gameState.recentHits.filter(h => now - h.time < 2000); gameState.recentHits.forEach(h => { const x = 150 - (h.offset * scale); const age = now - h.time; const alpha = 1 - (age / 2000); let color = "255, 255, 255"; const abs = Math.abs(h.offset); if (abs <= J_MARVELOUS) color = "163, 247, 255"; else if (abs <= J_PERFECT) color = "255, 230, 0"; else if (abs <= J_GREAT) color = "68, 255, 75"; else if (abs <= J_GOOD) color = "0, 153, 255"; else if (abs <= J_BAD) color = "170, 0, 255"; else color = "255, 51, 51"; eCtx.fillStyle = `rgba(${color}, ${alpha})`; eCtx.fillRect(x - 1, 0, 3, 20); }); const offsets = gameState.hitOffsets; if (offsets.length > 0) { const sum = offsets.reduce((a, b) => a + b, 0); const mean = sum / offsets.length; setText('hit-mean', `${mean.toFixed(2)} ms`); } }
-function drawNPSGraph() {
+function drawErrorBar(currentTime) {
+    const eb = document.getElementById('errorBarCanvas'); if (!eb) return;
+    const eCtx = eb.getContext('2d'); eCtx.clearRect(0, 0, eb.width, eb.height);
+    const scale = 150 / 180;
+    const nowMs = currentTime * 1000;
+
+    // Drawing logic without filtering the entire array
+    const hits = gameState.recentHits;
+    for (let i = hits.length - 1; i >= 0; i--) {
+        const h = hits[i];
+        const age = nowMs - h.time;
+        if (age > 2000) {
+            // Optimization: Cleanup old hits periodically or just ignore
+            // If we iterate backwards and find one too old, subsequent ones (older) will also be too old.
+            // But they might not be sorted if triggerJudgement isn't always sequential? 
+            // In game they are always sequential.
+            break;
+        }
+        const x = 150 - (h.offset * scale);
+        const alpha = 1 - (age / 2000);
+        let color = "255, 255, 255";
+        const abs = Math.abs(h.offset);
+        if (abs <= J_MARVELOUS) color = "163, 247, 255";
+        else if (abs <= J_PERFECT) color = "255, 230, 0";
+        else if (abs <= J_GREAT) color = "68, 255, 75";
+        else if (abs <= J_GOOD) color = "0, 153, 255";
+        else if (abs <= J_BAD) color = "170, 0, 255";
+        else color = "255, 51, 51";
+
+        eCtx.fillStyle = `rgba(${color}, ${alpha})`;
+        eCtx.fillRect(x - 1, 0, 3, 20);
+    }
+
+    // Incremental mean calculation
+    if (gameState.hitCount > 0) {
+        const mean = gameState.hitSum / gameState.hitCount;
+        setText('hit-mean', `${mean.toFixed(2)} ms`);
+    }
+
+    // Periodic Cleanup of recentHits (every ~2 seconds of game time)
+    if (!gameState.lastCleanupTime || currentTime - gameState.lastCleanupTime > 2.0) {
+        gameState.recentHits = hits.filter(h => nowMs - h.time < 2000);
+        gameState.lastCleanupTime = currentTime;
+    }
+}
+function drawNPSGraph(currentTime) {
     const c = document.getElementById('npsGraph');
     if (!c) return;
     const ctx = c.getContext('2d');
@@ -3623,48 +3643,54 @@ function drawNPSGraph() {
     ctx.clearRect(0, 0, w, h);
 
     // FIX: Use the currentTime calculated in gameLoop to ensure sync across modes (Vinyl/Stretch)
-    if (typeof gameState.lastCalculatedTime === 'undefined') return;
-    const currentSongTime = gameState.lastCalculatedTime;
+    const currentSongTime = currentTime;
     const now = performance.now() / 1000; // Use performance.now for internal throttling time
 
-    // Throttle Update: Every 250ms
+    // Throttle NPS display and calculation: Every 250ms
     if (!gameState.lastNPSUpdate || now - gameState.lastNPSUpdate >= 0.25) {
         gameState.lastNPSUpdate = now;
 
         const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
 
         // Calculate NPS from 3s real-time window
-        // In song time, that's a window of (3 * rate) seconds.
         let count = 0;
-        // Optimization: Binary search or cursor could be used, but for now we iterate
-        for (let n of gameState.notes) {
-            // Note is in window: [current - 3s, current]
-            if (n.time > currentSongTime - (3 * rate) && n.time <= currentSongTime) {
-                count++;
-            }
-            if (n.time > currentSongTime) break;
+
+        // Use a cursor to accelerate NPS calculation
+        if (typeof gameState.npsCursor === 'undefined') gameState.npsCursor = 0;
+
+        // Re-start cursor if it drifted too far or song skipped
+        if (gameState.npsCursor >= gameState.notes.length || gameState.notes[gameState.npsCursor].time > currentSongTime) {
+            gameState.npsCursor = 0;
         }
 
-        // Calculate NPS relative to ELAPSED time if song just started (prevent massive 0.0 dip)
+        for (let i = gameState.npsCursor; i < gameState.notes.length; i++) {
+            const n = gameState.notes[i];
+            if (n.time < currentSongTime - (3 * rate)) {
+                gameState.npsCursor = i;
+                continue;
+            }
+            if (n.time > currentSongTime) break;
+            count++;
+        }
+
         const elapsedReal = Math.min(3.0, (currentSongTime - gameState.firstNoteTime) / rate);
         gameState.currentNPS = (elapsedReal > 0.5) ? (count / elapsedReal).toFixed(1) : "0.0";
 
-        // Track Peak
         if (parseFloat(gameState.currentNPS) > parseFloat(gameState.peakNPS)) {
             gameState.peakNPS = gameState.currentNPS;
         }
 
         gameState.npsHistory.push({ time: now, val: parseFloat(gameState.currentNPS) });
-        if (gameState.npsHistory.length > 80) gameState.npsHistory.shift(); // Slightly more history
-    }
+        if (gameState.npsHistory.length > 80) gameState.npsHistory.shift();
 
-    setText('hud-nps', gameState.currentNPS);
-    setText('hud-peak-nps', gameState.peakNPS);
+        // Update DOM inside throttle
+        setText('hud-nps', gameState.currentNPS);
+        setText('hud-peak-nps', gameState.peakNPS);
+    }
 
     ctx.strokeStyle = "#00e5ff";
     ctx.lineWidth = 2;
     ctx.beginPath();
-
     const maxVal = Math.max(10, parseFloat(gameState.peakNPS));
 
     gameState.npsHistory.forEach((p, i) => {
@@ -3729,26 +3755,11 @@ function gameLoop() {
         }
 
         // --- AUDIO OFFSET APPLICATION ---
-        // User wants GLOBAL OFFSET.
-        // If Global Offset is +10ms, it means audio is "late" relative to input? 
-        // Or Input is "early"?
-        // Standard: Offset shifts the Visual Time relative to Audio Time.
-        // Time used for Visuals and Judgement = AudioTime + Offset.
-        // If Offset is positive, Time increases. Visuals move further.
-        // If user hits early (+offsets), they need visuals to be 'later' (less advanced)? No.
-        // Let's stick to standard: Time += Offset.
-        // If I hit early (+50ms), I need notes to arrive LATER.
-        // Note position = (NoteTime - Time) * Speed.
-        // If I add to Time, (NoteTime - Time) becomes SMALLER.
-        // Notes move "down" (past) faster.
-        // If I hit early, the note was "too high". I need it "lower" (closer to target).
-        // So I need Time to be LARGER.
-        // So Time += Offset is correct for fixing Early hits (if positive offset).
         if (userConfig.globalOffset) {
             currentTime += (userConfig.globalOffset / 1000);
         }
 
-        // Cache this for HUD elements like NPS graph
+        // Cache this for HUD elements and rendering
         gameState.lastCalculatedTime = currentTime;
 
         // --- SYNC INSTRUCTION FADE-IN ---
@@ -3836,42 +3847,22 @@ function gameLoop() {
         }
 
         // Update BPM Display
-        // We need to find current BPM at 'currentTime'.
-        // Assuming 'gameState.chart.bpms' exists (parsed Simfile).
         if (gameState.chart && gameState.chart.bpms) {
-            // Simple search (can be optimized)
-            // BPMs: [{beat, value}]
-            // We need current beat.
-            // We can get beat from time? Or if we track currentBeat global?
-            // Let's rely on finding standard BPM for now.
-            // If we don't have a reliable getBeatFromTime function in scope, we might ESTIMATE.
-            // Actually, logic usually iterates bpms to find scroll/speed.
-            // Let's just find the latest BPM <= currentTime (converted to beat? or mapped).
-            // Standard SM parsers act on Beats.
-            // Without a robust Time->Beat sync in this loop text, we might just show initial or rely on a helper.
-            // Let's assume we can get it via a helper or last active.
-            // If not, we skip dynamic BPM for now and show valid initial.
-            // WAIT: 'updateScrollSpeed' usually deals with BPM if CMOD is not used.
-            // Let's try to fetch it if we can.
-            // Hack: Just display the first BPM or last seen.
-            // BETTER: Use 'currentBPM' tracked variable if exists.
-            // If not, let's look for it in activeNotes? No.
-            // Let's iterate bpms:
-            // Update BPM Display
             let currentBPM = 120;
             if (typeof getCurrentBPM === 'function') {
                 currentBPM = getCurrentBPM();
-            } else if (gameState.chart && gameState.chart.bpms && gameState.chart.bpms.length > 0) {
-                currentBPM = gameState.chart.bpms[0].bpm;
+            } else if (gameState.chart.bpms.length > 0) {
+                currentBPM = gameState.chart.bpms[0].bpm || gameState.chart.bpms[0].value || 120;
             }
 
-            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
             const displayBPM = currentBPM * rate;
 
-            // Throttle BPM Text Update
-            if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
-                setText('hud-val-bpm', displayBPM.toFixed(2));
-                gameState.lastBPMUpdateVal = displayBPM;
+            // Throttle BPM Text Update (every 200ms)
+            if (gameState.fpsTimer === 0) {
+                if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
+                    setText('hud-val-bpm', displayBPM.toFixed(2));
+                    gameState.lastBPMUpdateVal = displayBPM;
+                }
             }
         }
 
@@ -3970,28 +3961,29 @@ function gameLoop() {
         if (!gameState.spriteRotations) gameState.spriteRotations = [90, 0, 180, 270];
         if (!gameState.vectorRotations) gameState.vectorRotations = [270, 180, 0, 90];
         const rotations = assets.loaded.arrowSprite ? gameState.spriteRotations : gameState.vectorRotations;
+
+        ctx.save();
         for (let i = 0; i < 4; i++) {
             drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i);
         }
+        ctx.restore();
 
         // Process & Draw Visible Notes
-        // Process & Draw Visible Notes
-        visibleNotes.forEach(note => {
+        for (let j = 0; j < visibleNotes.length; j++) {
+            const note = visibleNotes[j];
             // --- HOLD LOGIC ---
-            // If the note is a hold/roll that was hit (triggered active)
             if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
 
                 // 1. Check if finalized (reached end)
                 if (currentTime >= note.endTime) {
                     note.holdState = 'ok';
-                    triggerHoldJudgement(note, true); // Trigger OK judgment
+                    triggerHoldJudgement(note, true, currentTime);
 
-                    // If key is still held when hold ends, require a fresh press for next note
                     if (gameState.heldKeys[note.col]) {
                         if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
                         gameState.needsRelease[note.col] = true;
                     }
-                    return;
+                    continue;
                 }
 
                 // 2. Check input status
@@ -3999,156 +3991,110 @@ function gameLoop() {
 
                 if (note.type === 'hold') {
                     if (!keyHeld) {
-                        // Key released! Start grace period logic.
-                        if (!note.letGoTime) {
-                            note.letGoTime = currentTime; // Record when let go
-                        }
-
-                        // Check if grace period expired (250ms)
+                        if (!note.letGoTime) note.letGoTime = currentTime;
                         if ((currentTime - note.letGoTime) * 1000 > 250) {
                             note.holdState = 'ng';
-                            triggerHoldJudgement(note, false); // Fail
-
-                            // If key is still held when hold fails, require a fresh press for next note
+                            triggerHoldJudgement(note, false, currentTime);
                             if (gameState.heldKeys[note.col]) {
                                 if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
                                 gameState.needsRelease[note.col] = true;
                             }
                         }
                     } else {
-                        // Key IS held.
-                        // If we were in grace period (letGoTime set), we recovered!
                         note.letGoTime = null;
                     }
                 } else if (note.type === 'roll') {
-                    // Roll logic: check time since last press
-                    const limit = 0.5; // 500ms roll window
+                    const limit = 0.5;
                     const timeDiff = currentTime - note.lastPressTime;
-
                     if (timeDiff > limit) {
                         note.holdState = 'ng';
-                        triggerHoldJudgement(note, false);
-
-                        // If key is still held when roll fails, require a fresh press for next note
+                        triggerHoldJudgement(note, false, currentTime);
                         if (gameState.heldKeys[note.col]) {
                             if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
                             gameState.needsRelease[note.col] = true;
                         }
                     } else {
-                        // Roll Transparency Feedback (Fade as it gets closer to dying)
-                        // timeDiff 0 -> 1.0 opacity
-                        // timeDiff 0.5 -> 0.0 opacity (or minimal visible)
-                        // Let's keep min opacity 0.3 so it's visible.
-                        // Formula: 1 - (timeDiff / limit)
-                        // We need to pass this alpha to the draw function? 
-                        // The draw function below (drawImage) uses globalAlpha?
-                        // We need to set a custom property on the note for the draw routine to read?
-                        // Or verify if we are drawing the BODY here or later?
-                        // This loop iterates visibleNotes but doesn't DRAW them yet.
-                        // The drawing happens in a separate loop? No.
-                        // Wait, `visibleNotes.forEach` block IS processing. where is drawing?
-
-                        // Ah, this block (3206) is "Process & Draw Visible Notes" but I don't see drawImage calls for Body here.
-                        // Let me check further down.
                         note.rollAlpha = Math.max(0.2, 1 - (timeDiff / limit));
                     }
                 }
             }
 
-            if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') return;
+            if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') continue;
 
-            // Cleanup Missed Holds that have passed
-            if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) { // +0.5 buffer
+            if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) {
                 note.processed = true;
-                return;
+                continue;
             }
-
-            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
 
             const timeDiff = note.time - currentTime;
 
-            // Mine Logic - Scale Window
+            // Mine Logic
             if (note.type === 'mine' && !note.processed) {
-                // Convert to Real Time MS
                 const realMsDiff = (timeDiff * 1000) / rate;
-
                 if (Math.abs(realMsDiff) <= J_MINE_WINDOW) {
                     if (gameState.heldKeys[note.col] && !gameState.isAutoplay) {
-                        // Pass Song Time MS or Real Time MS appropriately? 
-                        // triggerJudgement usually takes pure offset.
-                        // Mines use a simplified trigger? 
-                        // Original passed msDiff (Song Time). 
-                        // But triggerJudgement uses it for stats? 
-                        // Let's pass Real Time MS for consistency.
-                        triggerJudgement(note, realMsDiff, false);
+                        triggerJudgement(note, realMsDiff, false, currentTime);
                     }
                 }
-                // Use Scaled Expiry for Mines too?
-                // If passed mine completely.
-                // Original: msDiff < -J_MINE_WINDOW
-                if (realMsDiff < -J_MINE_WINDOW) { note.processed = true; return; }
+                if (realMsDiff < -J_MINE_WINDOW) { note.processed = true; continue; }
             }
 
             // AUTO PLAY LOGIC
             if (gameState.isAutoplay && !note.processed && !note.hit && note.type !== 'mine') {
-                if (timeDiff <= 0) { // Exact time or passed
+                if (timeDiff <= 0) {
                     note.hit = true;
-                    gameState.heldKeys[note.col] = true; // Visual feedback
-                    triggerJudgement(note, 0, false);
-
-                    // For Holds/Rolls
+                    gameState.heldKeys[note.col] = true;
+                    triggerJudgement(note, 0, false, currentTime);
                     if (note.type === 'hold' || note.type === 'roll') {
                         note.holdState = 'active';
                     } else {
-                        // Tap note: release key quickly
                         setTimeout(() => gameState.heldKeys[note.col] = false, 50);
                     }
-                    return;
+                    continue;
                 }
             }
 
-            // Autoplay Hold Release
             if (gameState.isAutoplay && (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-                gameState.heldKeys[note.col] = true; // Keep holding
+                gameState.heldKeys[note.col] = true;
                 if (currentTime >= note.endTime) {
-                    gameState.heldKeys[note.col] = false; // Release
+                    gameState.heldKeys[note.col] = false;
                 }
             }
 
-            // MISS CHECK - Scale Window by Rate
-            // If window is 180ms real time, that's (180/1000)*rate seconds in song time.
-            // If timeDiff (Song Time) < -WindowSongTime, then we missed.
+            // MISS CHECK
             if (timeDiff < -((J_MISS_WINDOW / 1000) * rate) && !note.hit && note.type !== 'mine' && note.holdState === 'inactive') {
                 note.processed = true;
-                triggerJudgement(note, J_MISS_WINDOW + 1, true);
-                return;
+                triggerJudgement(note, J_MISS_WINDOW + 1, true, currentTime);
+                continue;
             }
-            let y;
-            if (userConfig.downScroll) y = gameConfig.receptorY - (timeDiff * gameConfig.scrollSpeed);
-            else y = gameConfig.receptorY + (timeDiff * gameConfig.scrollSpeed);
 
-            // Visibility Check: Account for Tail (minY to maxY)
+            let y;
+            const scrollDist = timeDiff * gameConfig.scrollSpeed;
+            if (userConfig.downScroll) y = gameConfig.receptorY - scrollDist;
+            else y = gameConfig.receptorY + scrollDist;
+
+            // Visibility Check
             let noteTop = y;
             let noteBottom = y;
 
             if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
                 const duration = note.endTime - note.time;
-                const dist = duration * gameConfig.scrollSpeed;
-                let tailY;
-                if (userConfig.downScroll) tailY = y - dist; else tailY = y + dist;
-
-                noteTop = Math.min(y, tailY);
-                noteBottom = Math.max(y, tailY);
+                const distTotal = duration * gameConfig.scrollSpeed;
+                if (userConfig.downScroll) noteTop = y - distTotal; else noteBottom = y + distTotal;
             }
 
-            // Add buffer (1000px)
-            if (noteBottom > -1000 && noteTop < canvas.height + 1000) {
-                drawNote(note, y, rotations[note.col]);
+            if (noteBottom > -100 && noteTop < canvas.height + 100) {
+                drawNote(note, y, rotations[note.col], currentTime);
             }
-        });
+        }
 
-        drawErrorBar();
-        drawNPSGraph();
+        // --- RENDER HOLD EXPLOSIONS ON TOP ---
+        for (let i = 0; i < 4; i++) {
+            drawHoldExplosion(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i, currentTime);
+        }
+
+        drawErrorBar(currentTime);
+        drawNPSGraph(currentTime);
 
         // Cache totalTime to avoid repeated array access
         if (!gameState.cachedTotalTime) {
@@ -4862,7 +4808,7 @@ function processInput(colIndex, type, currentTime, rate) {
             hittableNote.hit = true;
             // Convert Song Time Diff to Real Time MS for Judgment
             const diffMs = (hittableNote.time - currentTime) * 1000 / rate;
-            triggerJudgement(hittableNote, diffMs, false);
+            triggerJudgement(hittableNote, diffMs, false, currentTime);
         }
 
     } else {
@@ -4890,6 +4836,8 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         lifeHistory: [],
         comboHistory: [],
         hitOffsets: [],
+        hitSum: 0,
+        hitCount: 0,
         recentHits: [],
         detailedHits: [],
         accumulatedAccuracyPoints: 0,
