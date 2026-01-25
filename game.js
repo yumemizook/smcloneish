@@ -1518,6 +1518,10 @@ function calculateDetailedDifficulty(notes) {
         let quantizedDensity = 0;
         let concentration = 0;
 
+        const rowCount = i - windowIndex;
+        const jackFrequency = rowCount > 0 ? jackCount / rowCount : 0;
+        const chordFrequency = rowCount > 0 ? chordCount / rowCount : 0;
+
         if (nps > 15) {
             // Vibro
             const sortedCounts = [...colCounts].sort((a, b) => b - a);
@@ -1527,11 +1531,14 @@ function calculateDetailedDifficulty(notes) {
                 vibroFactor = Math.max(0.6, 1.0 - (concentration - 0.8) * 2.0);
             }
 
-            // Quadspam
+            // Quadspam detection: Dense notes in few buckets
             const effectiveRows = buckets.size || 1;
             quantizedDensity = noteCount / effectiveRows;
             if (quantizedDensity > 2.5) {
-                quadFactor = Math.max(0.4, 1.0 - (quantizedDensity - 2.5) * 1.0);
+                // Refinement: If it's heavy jacks (chordjack), we don't want to penalize as hard
+                // because it's actually difficult, not just vibro/quadspam.
+                const jackGrace = Math.min(0.3, jackFrequency * 0.5);
+                quadFactor = Math.max(0.4, 1.0 - (quantizedDensity - 2.5) * (1.0 - jackGrace));
             }
 
             // Roll/Speed Cap
@@ -1543,9 +1550,6 @@ function calculateDetailedDifficulty(notes) {
         const penalty = Math.min(vibroFactor, quadFactor, rollFactor);
         const penalizedNPS = nps * penalty;
 
-        const rowCount = i - windowIndex;
-        const jackFrequency = rowCount > 0 ? jackCount / rowCount : 0;
-        const chordFrequency = rowCount > 0 ? chordCount / rowCount : 0;
 
         // Snap Complexity Factor (Average of row weights)
         const avgComplexity = rowCount > 0 ? complexitySum / rowCount : 1.0;
@@ -1560,10 +1564,18 @@ function calculateDetailedDifficulty(notes) {
         let sHs = 0; if (handCount > 0) { sHs = (penalizedNPS * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
 
         let sCj = penalizedNPS * rate * chordFrequency * jackFrequency;
-        cjStrains.push(sCj);
 
         // Tech with Snap Complexity & Mixed Bonus
         let sTech = penalizedNPS * rate * (0.4 + jackFrequency) * avgComplexity * mixedBonus;
+
+        // Chordjack Bonus: Reward high-NPS dense chordjacks (35+ NPS)
+        if (nps > 30) {
+            const cjDensityBonus = Math.max(1.0, 1.0 + (nps - 30) * 0.01 * chordFrequency * jackFrequency);
+            sCj *= cjDensityBonus;
+            sTech *= (1 + (cjDensityBonus - 1) * 0.5); // Tech also gets half bonus
+        }
+
+        cjStrains.push(sCj);
         techStrains.push(sTech);
 
         // Max Strain for Stamina
@@ -3409,26 +3421,32 @@ function drawNPSGraph() {
     const h = c.height;
     ctx.clearRect(0, 0, w, h);
 
-    const now = audioCtx.currentTime - gameState.startTime;
+    // FIX: Use the currentTime calculated in gameLoop to ensure sync across modes (Vinyl/Stretch)
+    if (typeof gameState.lastCalculatedTime === 'undefined') return;
+    const currentSongTime = gameState.lastCalculatedTime;
+    const now = performance.now() / 1000; // Use performance.now for internal throttling time
 
     // Throttle Update: Every 250ms
     if (!gameState.lastNPSUpdate || now - gameState.lastNPSUpdate >= 0.25) {
         gameState.lastNPSUpdate = now;
 
         const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-        const currentSongTime = now * rate;
 
-        // Calculate NPS from 3s window (Real Time)
-        // Window in Song Time = 3 * rate
+        // Calculate NPS from 3s real-time window
+        // In song time, that's a window of (3 * rate) seconds.
         let count = 0;
+        // Optimization: Binary search or cursor could be used, but for now we iterate
         for (let n of gameState.notes) {
-            // Check window in Song Time
-            if (n.time > currentSongTime - (3 * rate) && n.time <= currentSongTime) count++;
-            if (n.time > currentSongTime) break; // Optimization
+            // Note is in window: [current - 3s, current]
+            if (n.time > currentSongTime - (3 * rate) && n.time <= currentSongTime) {
+                count++;
+            }
+            if (n.time > currentSongTime) break;
         }
 
-        // Average NPS over 3 seconds (Real Time)
-        gameState.currentNPS = (count / 3).toFixed(1);
+        // Calculate NPS relative to ELAPSED time if song just started (prevent massive 0.0 dip)
+        const elapsedReal = Math.min(3.0, (currentSongTime - gameState.firstNoteTime) / rate);
+        gameState.currentNPS = (elapsedReal > 0.5) ? (count / elapsedReal).toFixed(1) : "0.0";
 
         // Track Peak
         if (parseFloat(gameState.currentNPS) > parseFloat(gameState.peakNPS)) {
@@ -3436,7 +3454,7 @@ function drawNPSGraph() {
         }
 
         gameState.npsHistory.push({ time: now, val: parseFloat(gameState.currentNPS) });
-        if (gameState.npsHistory.length > 50) gameState.npsHistory.shift();
+        if (gameState.npsHistory.length > 80) gameState.npsHistory.shift(); // Slightly more history
     }
 
     setText('hud-nps', gameState.currentNPS);
@@ -3446,11 +3464,10 @@ function drawNPSGraph() {
     ctx.lineWidth = 2;
     ctx.beginPath();
 
-    // Scale Graph
     const maxVal = Math.max(10, parseFloat(gameState.peakNPS));
 
     gameState.npsHistory.forEach((p, i) => {
-        const x = (i / 50) * w;
+        const x = (i / 80) * w;
         const y = h - (p.val / maxVal * h);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -3529,6 +3546,9 @@ function gameLoop() {
         if (userConfig.globalOffset) {
             currentTime += (userConfig.globalOffset / 1000);
         }
+
+        // Cache this for HUD elements like NPS graph
+        gameState.lastCalculatedTime = currentTime;
 
         // --- SYNC INSTRUCTION FADE-IN ---
         if (window.isSyncMode) {
