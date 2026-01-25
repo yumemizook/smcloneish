@@ -325,52 +325,24 @@ function setModifier(cat, val, subParam) {
 
         if (val === 'X') {
             // Conversion Logic: C -> X
-            // We want to match the PEAK speed (Max BPM * Multiplier)
-            if (oldType === 'C' || oldType === 'M') {
-                const bpmStats = window.currentBPMStats || { max: 150 }; // Fallback
-                // C600 = 600 px/s
-                // X calc: BPM * Mult = px/s (roughly, assuming standard scroll)
-                // Actually: 
-                // C-Mod: scroll speed is constant 'speedValue' (e.g. 600)
-                // X-Mod: scroll speed is BPM * speedValue
-                // So: 600 = MaxBPM * NewMult
-                // NewMult = 600 / MaxBPM
-
-                // Safety check
-                const maxBpm = Math.max(1, bpmStats.max);
-                let newMult = modConfig.speedValue / maxBpm;
-
-                // Round to nearest 0.25 for cleanliness, or keep precise?
-                // User asked for "calculated so that it matches". 
-                // Let's round to 1 decimal first, or 0.25 steps.
-                // 600 / 150 = 4.0. 
-                // 600 / 140 = 4.28... -> 4.3?
-                // Let's use 0.1 precision.
-                newMult = Math.round(newMult * 10) / 10;
-
-                modConfig.speedValue = Math.max(0.5, newMult);
-            } else {
-                modConfig.speedValue = 2.0; // Default if not converting
-            }
+            // Use Main BPM (Weighted Mode) as requested
+            const bpmStats = window.currentBPMStats || { main: 150 };
+            const mainBpm = Math.max(1, bpmStats.main || bpmStats.max || 150);
+            let newMult = modConfig.speedValue / mainBpm;
+            newMult = Math.round(newMult * 10) / 10;
+            modConfig.speedValue = Math.max(0.5, newMult);
         }
         else if (val === 'C' || val === 'M') {
             // Conversion Logic: X -> C/M
             if (oldType === 'X') {
-                const bpmStats = window.currentBPMStats || { max: 150 };
-                const maxBpm = Math.max(1, bpmStats.max);
-
-                // Calc: Mult * BPM = Px/s
-                let newSpeed = modConfig.speedValue * maxBpm;
-
-                // Round to nearest 10 for cleaner numbers (e.g. 642 -> 640)
+                const bpmStats = window.currentBPMStats || { main: 150 };
+                const mainBpm = Math.max(1, bpmStats.main || bpmStats.max || 150);
+                let newSpeed = modConfig.speedValue * mainBpm;
                 newSpeed = Math.round(newSpeed / 10) * 10;
-
                 modConfig.speedValue = Math.max(50, newSpeed);
             } else if (modConfig.speedValue < 50) {
-                // If coming from uninitialized or weird state
                 modConfig.speedValue = 400;
             }
-            // If C -> M or M -> C, keep same value (already shared speedValue property)
         }
     }
     if (cat === 'fail') modConfig.failMode = val;

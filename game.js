@@ -210,6 +210,7 @@ function parseSM(text) {
                 charts.push({
                     difficulty: parts[2].trim(),
                     meter: parts[3].trim(),
+                    credit: parts[1].trim(),
                     notes: parseNoteData(parts[5].replace(';', '').trim(), meta.bpms, meta.offset),
                     bpms: meta.bpms
                 });
@@ -293,6 +294,7 @@ function parseSSC(text) {
                 charts.push({
                     difficulty: difficulty,
                     meter: meter,
+                    credit: getTag(block, 'CREDIT') || "",
                     notes: parseNoteData(notesRaw.trim(), chartBpms, meta.offset),
                     bpms: chartBpms
                 });
@@ -328,14 +330,14 @@ function parseNoteData(data, bpms, songOffset) {
             // If target is in this segment
             if (targetBeat < segmentEndBeat) {
                 const duration = targetBeat - Math.max(pBeat, b.beat);
-                if (duration > 0) {
+                if (duration > 0 && b.value > 0) {
                     time += duration * (60 / b.value);
                 }
                 break;
             } else {
                 // Add full segment
                 const duration = segmentEndBeat - Math.max(pBeat, b.beat);
-                if (duration > 0) {
+                if (duration > 0 && b.value > 0) {
                     time += duration * (60 / b.value);
                 }
             }
@@ -355,8 +357,8 @@ function parseNoteData(data, bpms, songOffset) {
             for (let col = 0; col < 4; col++) {
                 const char = line[col];
 
-                if (char === '1' || char === '2' || char === '4' || char === 'M') {
-                    const type = char === '1' ? 'tap' : (char === '2' ? 'hold' : (char === '4' ? 'roll' : 'mine'));
+                if (char === '1' || char === '2' || char === '4' || char === 'M' || char === 'F') {
+                    const type = char === '1' ? 'tap' : (char === '2' ? 'hold' : (char === '4' ? 'roll' : (char === 'M' ? 'mine' : 'fake')));
                     const note = {
                         beat: exactBeat, time: time, col: col, type: type,
                         hit: false, processed: false, holdState: 'inactive', endTime: null
@@ -1035,7 +1037,8 @@ function selectSong(index) {
                 gradeHtml = `<span class="diff-best-grade" style="color:${gradeColor}">${bestGrade}</span>`;
             }
 
-            btn.innerHTML = `<span>${chart.difficulty}</span> <div style="display:flex; align-items:center;">${gradeHtml} <span style="margin-left:10px">${chart.meter}</span></div>`;
+            const authorHtml = chart.credit ? `<div class="diff-author">${chart.credit}</div>` : '';
+            btn.innerHTML = `<div class="diff-label-group"><span>${chart.difficulty}</span>${authorHtml}</div> <div style="display:flex; align-items:center;">${gradeHtml} <span style="margin-left:10px">${chart.meter}</span></div>`;
             btn.onclick = () => selectDifficulty(cIndex);
             diffList.appendChild(btn);
         });
@@ -1259,6 +1262,30 @@ function updateBannerStats(chart) {
     `;
 }
 
+function calculateNoteCounts(notes) {
+    let counts = { notes: 0, jumps: 0, hands: 0, holds: 0, rolls: 0, mines: 0, fakes: 0 };
+    const timeRows = new Map();
+
+    notes.forEach(n => {
+        if (n.type === 'tap' || n.type === 'hold' || n.type === 'roll') {
+            if (!timeRows.has(n.time)) timeRows.set(n.time, 0);
+            timeRows.set(n.time, timeRows.get(n.time) + 1);
+        }
+        if (n.type === 'hold') counts.holds++;
+        if (n.type === 'roll') counts.rolls++;
+        if (n.type === 'mine') counts.mines++;
+        if (n.type === 'fake') counts.fakes++;
+    });
+
+    timeRows.forEach(count => {
+        if (count === 1) counts.notes++;
+        else if (count === 2) counts.jumps++;
+        else if (count >= 3) counts.hands++;
+    });
+
+    return counts;
+}
+
 function selectDifficulty(chartIndex) {
     selectedChartIndex = chartIndex;
     const items = document.querySelectorAll('.ss-diff-item');
@@ -1272,6 +1299,7 @@ function selectDifficulty(chartIndex) {
 
     if (chart.notes) {
         const calc = calculateDetailedDifficulty(chart.notes);
+        const nc = calculateNoteCounts(chart.notes);
 
         // Helper to set Text and Color
         const setC = (id, val) => {
@@ -1285,16 +1313,53 @@ function selectDifficulty(chartIndex) {
 
         setText('calc-nps', calc.nps.toFixed(2));
         setText('calc-peak', calc.peak.toFixed(2));
+        setText('calc-nps-info', calc.nps.toFixed(2));
+        setText('calc-peak-info', calc.peak.toFixed(2));
+
         setC('calc-overall', calc.overall);
+        setC('calc-overall-large', calc.overall);
         setC('calc-stream', calc.stream);
         setC('calc-jumpstream', calc.jumpstream);
         setC('calc-handstream', calc.handstream);
         setC('calc-chordjack', calc.chordjack);
         setC('calc-technical', calc.technical);
         setC('calc-stamina', calc.stamina);
+
+        // Top Skillsets (Up to 3, if >= 90% of overall)
+        const skills = [
+            { name: 'Stream', val: calc.stream },
+            { name: 'Jumpstream', val: calc.jumpstream },
+            { name: 'Handstream', val: calc.handstream },
+            { name: 'Chordjack', val: calc.chordjack },
+            { name: 'Technical', val: calc.technical },
+            { name: 'Stamina', val: calc.stamina }
+        ];
+        skills.sort((a, b) => b.val - a.val);
+        const tsContainer = document.getElementById('ss-top-skillsets');
+        if (tsContainer) {
+            tsContainer.innerHTML = '';
+            const threshold = calc.overall * 0.8;
+            const toShow = skills.slice(0, 3).filter(s => s.val >= threshold);
+            // If none are >= 80%, show the top one regardless
+            const selected = toShow.length > 0 ? toShow : [skills[0]];
+            selected.forEach(s => {
+                tsContainer.innerHTML += `<div class="top-skill-item"><span>${s.name}</span></div>`;
+            });
+        }
+
+        // Note Counts
+        setText('nc-notes', nc.notes);
+        setText('nc-jumps', nc.jumps);
+        setText('nc-hands', nc.hands);
+        setText('nc-holds', nc.holds);
+        setText('nc-rolls', nc.rolls);
+        setText('nc-mines', nc.mines);
+        setText('nc-fakes', nc.fakes);
+
     } else if (chart.difficultyCalc) {
         // Use cached stats if notes aren't loaded (from storage)
         const calc = chart.difficultyCalc;
+        // Note: nc is not cached in storage yet.
 
         // Helper to set Text and Color
         const setC = (id, val) => {
@@ -1308,13 +1373,38 @@ function selectDifficulty(chartIndex) {
 
         setText('calc-nps', calc.nps.toFixed(2));
         setText('calc-peak', calc.peak.toFixed(2));
+        setText('calc-nps-info', calc.nps.toFixed(2));
+        setText('calc-peak-info', calc.peak.toFixed(2));
+
         setC('calc-overall', calc.overall);
+        setC('calc-overall-large', calc.overall);
         setC('calc-stream', calc.stream);
         setC('calc-jumpstream', calc.jumpstream);
         setC('calc-handstream', calc.handstream);
         setC('calc-chordjack', calc.chordjack);
         setC('calc-technical', calc.technical);
         setC('calc-stamina', calc.stamina);
+
+        // Top Skillsets (Fallback cached, up to 3 if >= 80%)
+        const skills = [
+            { name: 'Stream', val: calc.stream },
+            { name: 'Jumpstream', val: calc.jumpstream },
+            { name: 'Handstream', val: calc.handstream },
+            { name: 'Chordjack', val: calc.chordjack },
+            { name: 'Technical', val: calc.technical },
+            { name: 'Stamina', val: calc.stamina }
+        ];
+        skills.sort((a, b) => b.val - a.val);
+        const tsContainer = document.getElementById('ss-top-skillsets');
+        if (tsContainer) {
+            tsContainer.innerHTML = '';
+            const threshold = calc.overall * 0.8;
+            const toShow = skills.slice(0, 3).filter(s => s.val >= threshold);
+            const selected = toShow.length > 0 ? toShow : [skills[0]];
+            selected.forEach(s => {
+                tsContainer.innerHTML += `<div class="top-skill-item"><span>${s.name}</span></div>`;
+            });
+        }
     }
 
     // Best Score Display
@@ -2316,7 +2406,7 @@ function triggerJudgement(note, offsetMs, isMiss = false, currentTime) {
     const lossMult = Math.max(0.1, 1.0 + (lifeDiff - 4) * 0.2);
     const gainMult = Math.max(0.1, 1.0 - (lifeDiff - 4) * 0.1);
 
-    if (!isMiss && note.type !== 'mine') {
+    if (!isMiss && note.type !== 'mine' && note.type !== 'fake') {
         gameState.hitSum += offsetMs;
         gameState.hitCount++;
         gameState.hitOffsets.push(offsetMs);
@@ -2419,16 +2509,18 @@ function triggerJudgement(note, offsetMs, isMiss = false, currentTime) {
         let accScore = 0;
         if (gameState.isAutoplay) {
             accScore = -75000;
-        } else if (isMiss && note.type !== 'mine') {
+        } else if (isMiss && note.type !== 'mine' && note.type !== 'fake') {
             accScore = calculateAccuracy(1000);
         } else if (note.type === 'mine') {
             accScore = -350; // Corrected mine penalty
+        } else if (note.type === 'fake') {
+            accScore = 0; // Fakes don't score
         } else {
             accScore = calculateAccuracy(offsetMs);
         }
 
         gameState.accumulatedAccuracyPoints += accScore;
-        gameState.totalNotesHitOrMissed++;
+        if (note.type !== 'fake') gameState.totalNotesHitOrMissed++;
         scoreAdd = Math.max(0, scoreAdd); gameState.score += scoreAdd;
 
         // OSU!MANIA SCORING IMPLEMENTATION
@@ -2482,7 +2574,7 @@ function triggerJudgement(note, offsetMs, isMiss = false, currentTime) {
     const currentAcc = gameState.totalNotesHitOrMissed > 0 ? (gameState.accumulatedAccuracyPoints / gameState.totalNotesHitOrMissed) : 100;
     gameState.accuracyHistory.push({ time: currentTime, acc: currentAcc, grade: getGrade(currentAcc) });
 
-    if (breaksCombo) gameState.combo = 0; else if (note.type !== 'mine') gameState.combo++;
+    if (breaksCombo) gameState.combo = 0; else if (note.type !== 'mine' && note.type !== 'fake') gameState.combo++;
     if (gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
 
     if (modConfig.lifeSystem === 'normal') {
@@ -3486,6 +3578,9 @@ function drawNote(note, y, rotation, currentTime) {
     }
 
     ctx.save();
+    if (note.type === 'fake') {
+        ctx.globalAlpha *= 0.2;
+    }
     ctx.globalAlpha *= alpha; // Combine with existing alpha if any
 
     const halfSize = gameConfig.columnWidth / 2;
@@ -3827,7 +3922,18 @@ function gameLoop() {
             // and we prioritize performance, let's approximate or use pre-calculated events if available.
             // Ideally, we'd have a 'cursor' for BPMs.
             // Let's use a cached index `gameState.bpmIndex`.
-            if (typeof gameState.bpmIndex === 'undefined') gameState.bpmIndex = 0;
+            if (typeof gameState.bpmIndex === 'undefined') {
+                gameState.bpmIndex = 0;
+                gameState.lastBPM = getCurrentBPM();
+            }
+
+            const currentBpm = getCurrentBPM();
+            if (currentBpm !== gameState.lastBPM) {
+                gameState.lastBPM = currentBpm;
+                updateScrollSpeed(rate);
+                const bpmEl = document.getElementById('hud-val-bpm');
+                if (bpmEl) bpmEl.innerText = Math.abs(Math.round(currentBpm));
+            }
 
             const bpms = gameState.chart.bpms;
             // Advance cursor
@@ -4947,7 +5053,8 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
             if (i > 0) {
                 const prev = meta.bpms[i - 1];
                 const beats = bpm.beat - prev.beat;
-                const seconds = beats * (60 / prev.value);
+                // Treat negative/zero BPM as warp (0 duration)
+                const seconds = (prev.value > 0) ? (beats * (60 / prev.value)) : 0;
                 curTime += seconds;
             }
 
@@ -5081,7 +5188,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
 
     gameState.notes = notes;
     gameState.activeNotes = gameState.notes; // For now all notes are "active" candidates
-    gameState.totalNotesInChart = notes.filter(n => n.type !== 'mine').length;
+    gameState.totalNotesInChart = notes.filter(n => n.type !== 'mine' && n.type !== 'fake').length;
 
     const firstNote = notes.find(n => n.type !== 'mine');
     gameState.firstNoteTime = firstNote ? firstNote.time : 0;
@@ -5628,9 +5735,8 @@ function updateScrollSpeed(rateOverride) {
     if ((type === 'C' || type === 'M') && val < 50) val = 50;
 
     // Scaling Factor (Reference Height: 480px)
-    // If canvas isn't ready, default to window height or 480
-    const height = (canvas && canvas.height) ? canvas.height : window.innerHeight;
-    const scaleFactor = height / 480;
+    const scaleFactor = (canvas && canvas.height) ? (canvas.height / 480) : 1.0;
+    const height = (canvas && canvas.height) ? canvas.height : 480;
 
     let targetSpeed = 400; // Base pixels per second (at 480px height)
 
@@ -5691,11 +5797,11 @@ function switchSongTab(tab) {
     // Find button index 0,1,2 hardcoded or by title? 
     // Simplified: Just match order or use data-tab attribute if we had it. 
     // We used onclick params. Let's select by index based on known order.
-    const tabs = ['info', 'scores', 'preview'];
+    const tabs = ['info', 'breakdown', 'scores', 'preview'];
     const btnIdx = tabs.indexOf(tab);
     if (btnIdx !== -1) {
-        const sidebar = document.querySelector('.ss-sidebar');
-        if (sidebar && sidebar.children[btnIdx]) sidebar.children[btnIdx].classList.add('active');
+        const navbar = document.querySelector('.ss-navbar');
+        if (navbar && navbar.children[btnIdx]) navbar.children[btnIdx].classList.add('active');
     }
 
     // Logic
