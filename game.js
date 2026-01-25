@@ -3348,6 +3348,12 @@ function drawReceptor(x, y, rotation, colIndex) {
     const halfSize = gameConfig.columnWidth / 2;
     ctx.translate(x + halfSize, y + halfSize);
     ctx.rotate(rotation * Math.PI / 180);
+
+    // Scale for Mini
+    if (modConfig.effect && modConfig.effect.name === 'mini') {
+        ctx.scale(0.5, 0.5);
+    }
+
     const drawSize = gameConfig.arrowSize;
     const offset = -drawSize / 2;
     if (assets.loaded.receptorSprite) {
@@ -3378,6 +3384,12 @@ function drawHoldExplosion(x, y, rotation, colIndex, currentTime) {
         const halfSize = gameConfig.columnWidth / 2;
         ctx.translate(x + halfSize, y + halfSize);
         ctx.rotate(rotation * Math.PI / 180);
+
+        // Scale for Mini
+        if (modConfig.effect && modConfig.effect.name === 'mini') {
+            ctx.scale(0.5, 0.5);
+        }
+
         const drawSize = gameConfig.arrowSize;
         const offset = -drawSize / 2;
 
