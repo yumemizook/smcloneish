@@ -1164,11 +1164,25 @@ input[type=range]::-webkit-slider-runnable-track {
     transform: translateY(-120px);
 }
 
-#accuracy {
-    font-size: 2.5rem;
-    font-weight: bold;
+#hud-score {
+    font-size: 3rem;
+    font-weight: 900;
     color: #fff;
-    text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    text-shadow: 0 0 15px rgba(255, 255, 255, 0.4);
+    margin-bottom: -5px;
+}
+
+#accuracy {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #00e5ff;
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+}
+
+#hud-dp {
+    font-size: 1rem;
+    color: #aaa;
+    margin-top: -2px;
 }
 
 #live-grade {
@@ -1443,19 +1457,46 @@ input[type=range]::-webkit-slider-runnable-track {
     opacity: 1;
 }
 
-@keyframes pulseFail {
+/* --- LIFE BAR SPECIAL MODES --- */
+.life-bar-life4 #life-bar-fill {
+    background: repeating-linear-gradient(to top,
+            #00ff00,
+            #00ff00 calc(25% - 4px),
+            rgba(0, 0, 0, 0.5) calc(25% - 4px),
+            rgba(0, 0, 0, 0.5) 25%) !important;
+}
 
-    /* Removed pulse for simple fade, or keep text pulse separate if desired */
-    /* If user wants just fade to black with text on top, simple static text is fine, or subtle pulse */
+.life-bar-life4 #life-bar-wrap {
+    background: #222;
+}
+
+.life-bar-risky #life-bar-fill,
+.life-bar-flare-ex #life-bar-fill,
+.life-bar-flare-neo #life-bar-fill {
+    animation: life-blink 0.5s infinite alternate;
+}
+
+.life-bar-flare-neo #life-bar-fill {
+    animation-duration: 0.2s;
+}
+
+@keyframes life-blink {
     from {
-        transform: scale(1);
-        opacity: 0.8;
+        opacity: 1;
     }
 
     to {
-        transform: scale(1.1);
-        opacity: 1;
+        opacity: 0.3;
     }
+}
+
+#flare-indicator {
+    display: block;
+    font-size: 0.8rem;
+    color: #ff3333;
+    font-weight: bold;
+    text-align: center;
+    margin-top: 5px;
 }
 
 #failed-overlay span {

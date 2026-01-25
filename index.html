@@ -176,7 +176,7 @@
 
             <!-- Modifiers Modal (Tabbed Layout) -->
             <div id="modifiers-modal" class="modal-overlay" style="display:none;">
-                <div class="modal-content modifiers-panel" style="width: 600px; max-width: 90vw;">
+                <div class="modal-content modifiers-panel" style="width: 850px; max-width: 95vw;">
                     <div class="mod-header-row">
                         <h2>Modifiers</h2>
                         <div class="mod-tabs">
@@ -187,6 +187,8 @@
                             <button id="mod-tab-notes" class="mod-tab-btn" onclick="showModTab('notes')">Notes</button>
                             <button id="mod-tab-effects" class="mod-tab-btn"
                                 onclick="showModTab('effects')">Effects</button>
+                            <button id="mod-tab-experimental" class="mod-tab-btn"
+                                onclick="showModTab('experimental')">Experimental</button>
                         </div>
                     </div>
 
@@ -466,6 +468,79 @@
                             </div>
                         </div>
                         <p class="mod-tip">Visual effects that distort the playfield.</p>
+                    </div>
+
+                    <div id="mod-section-experimental" class="mod-section-content" style="display:none;">
+                        <div class="mod-group" id="mod-scoring-system">
+                            <label>Scoring System (Cosmetic)</label>
+                            <div class="mod-toggles wrap">
+                                <button class="mod-toggle-btn" data-val="wife3"
+                                    onclick="setModifier('scoringSystem','wife3')">Wife3</button>
+                                <button class="mod-toggle-btn" data-val="itg"
+                                    onclick="setModifier('scoringSystem','itg')">ITG</button>
+                                <button class="mod-toggle-btn" data-val="ddr"
+                                    onclick="setModifier('scoringSystem','ddr')">DDR EX</button>
+                                <button class="mod-toggle-btn" data-val="sm"
+                                    onclick="setModifier('scoringSystem','sm')">Stepmania</button>
+                                <button class="mod-toggle-btn" data-val="osu"
+                                    onclick="setModifier('scoringSystem','osu')">osu!mania</button>
+                            </div>
+                        </div>
+
+                        <div class="mod-group" id="mod-life-system">
+                            <label>Life System</label>
+                            <div class="mod-toggles wrap">
+                                <button class="mod-toggle-btn" data-val="normal"
+                                    onclick="setModifier('lifeSystem','normal')">Normal</button>
+                                <button class="mod-toggle-btn" data-val="life4"
+                                    onclick="setModifier('lifeSystem','life4')">Life4</button>
+                                <button class="mod-toggle-btn" data-val="risky"
+                                    onclick="setModifier('lifeSystem','risky')">Risky</button>
+                                <button class="mod-toggle-btn" data-val="flare"
+                                    onclick="setModifier('lifeSystem','flare')">Flare</button>
+                            </div>
+                        </div>
+
+                        <div class="mod-group" id="mod-flare-level-group" style="display:none;">
+                            <label>Flare Level</label>
+                            <div class="mod-toggles wrap">
+                                <button class="mod-toggle-btn mini" data-val="I"
+                                    onclick="setModifier('flareLevel','I')">I</button>
+                                <button class="mod-toggle-btn mini" data-val="II"
+                                    onclick="setModifier('flareLevel','II')">II</button>
+                                <button class="mod-toggle-btn mini" data-val="III"
+                                    onclick="setModifier('flareLevel','III')">III</button>
+                                <button class="mod-toggle-btn mini" data-val="IV"
+                                    onclick="setModifier('flareLevel','IV')">IV</button>
+                                <button class="mod-toggle-btn mini" data-val="V"
+                                    onclick="setModifier('flareLevel','V')">V</button>
+                                <button class="mod-toggle-btn mini" data-val="VI"
+                                    onclick="setModifier('flareLevel','VI')">VI</button>
+                                <button class="mod-toggle-btn mini" data-val="VII"
+                                    onclick="setModifier('flareLevel','VII')">VII</button>
+                                <button class="mod-toggle-btn mini" data-val="VIII"
+                                    onclick="setModifier('flareLevel','VIII')">VIII</button>
+                                <button class="mod-toggle-btn mini" data-val="IX"
+                                    onclick="setModifier('flareLevel','IX')">IX</button>
+                                <button class="mod-toggle-btn mini" data-val="EX"
+                                    onclick="setModifier('flareLevel','EX')">EX</button>
+                                <button class="mod-toggle-btn mini" data-val="NEO"
+                                    onclick="setModifier('flareLevel','NEO')">NEO</button>
+                            </div>
+                        </div>
+
+                        <div class="mod-group" id="mod-acc-attack">
+                            <label>Accuracy Attack</label>
+                            <div class="mod-toggles wrap">
+                                <button class="mod-toggle-btn" data-val="off"
+                                    onclick="setModifier('accuracyAttack','off')">Off</button>
+                                <button class="mod-toggle-btn" data-val="standard"
+                                    onclick="setModifier('accuracyAttack','standard')">Standard</button>
+                                <button class="mod-toggle-btn" data-val="max"
+                                    onclick="setModifier('accuracyAttack','max')">Max Achievable</button>
+                            </div>
+                        </div>
+                        <p class="mod-tip">Experimental gameplay mechanics and scoring variations.</p>
                     </div>
 
                     <div class="mod-footer">
@@ -839,13 +914,16 @@
                         <div id="life-bar-fill"></div>
                     </div>
                     <span id="life-percent">50.0%</span>
+                    <div id="flare-indicator" style="display:none;"></div>
                 </div>
             </div>
 
             <!-- Center Overlay (Combo, Judge, Acc, Error Bar) -->
             <div class="hud-center">
                 <div class="hud-acc-box">
+                    <div id="hud-score" style="display:none;">0</div>
                     <div id="accuracy">0.0000%</div>
+                    <div id="hud-dp">0.00</div>
                 </div>
 
                 <div id="judgment"></div>
@@ -942,8 +1020,8 @@
                             </div>
                         </div>
                         <div class="res-score-col">
-                            <div class="res-stat-item"><span>SCORE</span> <span id="res-score">0</span></div>
-                            <div class="res-stat-item"><span>DP</span> <span id="res-dp">0.00</span></div>
+                            <div class="res-stat-item"><span>DP</span> <span id="res-score">0</span></div>
+                            <div class="res-stat-item"><span>SCORE</span> <span id="res-dp">0.00</span></div>
                             <!-- Removed Duplicate SSR Item -->
                             <div class="res-stat-item"><span>MAX COMBO</span> <span id="res-combo">0</span> <span
                                     id="res-combo-pct" class="sub-pct-inline"></span></div>

@@ -71,6 +71,46 @@ const J_BAD = BASE_J_BAD; // Alias for legacy/global access
 const J_MISS_WINDOW = BASE_J_MISS_WINDOW; // Alias for legacy/global access
 const J_MINE_WINDOW = 75; // Fixed
 
+const FLARE_DMG = {
+    'NEO': { marvelous: 0, perfect: 1.5, great: 3.0, good: 12.0, miss: 36.0, ng: 36.0, mine: 36.0 },
+    'EX': { marvelous: 0, perfect: 1.0, great: 2.0, good: 10.0, miss: 30.0, ng: 30.0, mine: 30.0 },
+    'IX': { marvelous: 0, perfect: 0.0, great: 2.0, good: 10.0, miss: 30.0, ng: 30.0, mine: 30.0 },
+    'VIII': { marvelous: 0, perfect: 0.0, great: 1.64, good: 8.20, miss: 26.0, ng: 26.0, mine: 26.0 },
+    'VII': { marvelous: 0, perfect: 0.0, great: 1.28, good: 6.40, miss: 22.0, ng: 22.0, mine: 22.0 },
+    'VI': { marvelous: 0, perfect: 0.0, great: 0.92, good: 4.50, miss: 18.0, ng: 18.0, mine: 18.0 },
+    'V': { marvelous: 0, perfect: 0.0, great: 0.74, good: 3.60, miss: 16.0, ng: 16.0, mine: 16.0 },
+    'IV': { marvelous: 0, perfect: 0.0, great: 0.56, good: 2.80, miss: 14.0, ng: 14.0, mine: 14.0 },
+    'III': { marvelous: 0, perfect: 0.0, great: 0.38, good: 1.90, miss: 12.0, ng: 12.0, mine: 12.0 },
+    'II': { marvelous: 0, perfect: 0.0, great: 0.29, good: 1.45, miss: 11.0, ng: 11.0, mine: 11.0 },
+    'I': { marvelous: 0, perfect: 0.0, great: 0.20, good: 1.00, miss: 10.0, ng: 10.0, mine: 10.0 }
+};
+
+function getCosmeticScore() {
+    const j = gameState.judgments;
+    const sys = modConfig.scoringSystem;
+
+    // Default long-form calculation for ITG fallback or generic
+    if (sys === 'itg') return Math.round(gameState.score);
+
+    if (sys === 'wife3') return Math.round(gameState.score);
+
+    // point-based DP Scores for HUD display
+    if (sys === 'ddr') {
+        const points = j.marvelous * 3 + j.perfect * 2 + j.great * 1;
+        return points;
+    }
+    if (sys === 'sm') {
+        const points = (j.marvelous + j.perfect) * 2 + j.great * 1 + j.good * 0 + j.bad * -4 + (j.miss + j.ng) * -8;
+        return Math.max(0, points);
+    }
+    if (sys === 'osu') {
+        return Math.round(gameState.osuScore);
+    }
+    return Math.round(gameState.score);
+}
+
+
+
 function getTimingWindow(windowName, judgeDiffOverride) {
     if (windowName === 'mine') return J_MINE_WINDOW;
     // Holds/Rolls fixed? Assuming yes based on previous task.
@@ -98,7 +138,15 @@ function getTimingWindow(windowName, judgeDiffOverride) {
 }
 const GRADE_COLORS = {
     "AAAAA": "#ffffff", "AAAA": "#66ccff", "AAA": "#eebb00", "AA": "#66cc66",
-    "A": "#da5757", "B": "#5b78bb", "C": "#c97bff", "D": "#8c6239", "F": "#888888"
+    "A": "#da5757", "B": "#5b78bb", "C": "#c97bff", "D": "#8c6239", "F": "#888888",
+    "E": "#e61e25", "SS": "#ffffff", "S": "#ffcc00",
+    "****": "#ffffff", "***": "#66ccff", "**": "#eebb00", "*": "#66cc66",
+    "S+": "#00e5ff", "S-": "#da5757",
+    "AA+": "#eebb00", "AA-": "#66cc66",
+    "A+": "#66cc66", "A-": "#da5757",
+    "B+": "#5b78bb", "B-": "#8c6239",
+    "C+": "#c97bff", "C-": "#8c6239",
+    "D+": "#da5757"
 };
 
 const CLEAR_COLORS = {
@@ -647,7 +695,10 @@ let gameState = {
     currentNPS: 0,
     peakNPS: 0,
     recentHits: [],
-    detailedHits: []
+    detailedHits: [],
+    osuScore: 0,
+    osuBonus: 100,
+    replayLog: []
 };
 
 let gameConfig = {
@@ -944,7 +995,12 @@ function selectSong(index) {
             const key = `webSM_lb_${song.meta.title}_${chart.difficulty}`;
             let bestGrade = '';
             try {
-                const lb = JSON.parse(localStorage.getItem(key)) || [];
+                const saved = localStorage.getItem(key);
+                let lb = [];
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    lb = Array.isArray(parsed) ? parsed : [parsed];
+                }
                 if (lb.length > 0) {
                     // Find best grade based on sorting or custom priority? 
                     // Find best grade based on sorting
@@ -1264,12 +1320,18 @@ function selectDifficulty(chartIndex) {
         bsContainer.style.display = 'block'; // Always show
         if (jGrid) jGrid.innerHTML = ''; // Clear judges
 
-        const rawLb = JSON.parse(localStorage.getItem(key)) || [];
+        const saved = localStorage.getItem(key);
+        let lb = [];
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            lb = Array.isArray(parsed) ? parsed : [parsed];
+        }
+
         // Filter out Invalid scores (Negative Acc, Fail, Invalid Fctype)
-        const lb = rawLb.filter(s => {
+        lb = lb.filter(s => {
             const acc = parseFloat(s.acc);
-            const fc = s.fcType || (s.judgments ? getFCType(s.judgments) : "");
-            return acc >= 0 && fc !== "Fail" && fc !== "Invalid";
+            const fc = s.clearType || (s.judgments ? getClearType(s.judgments) : "");
+            return acc >= 0 && fc !== "Failed" && fc !== "Invalid";
         });
 
         // Sort by robust logic (matches leaderboard)
@@ -1907,14 +1969,11 @@ async function startGameFromMenu() {
    MATH & SCORING
    ========================================= */
 
-function calculateAccuracy(offsetMs) {
+function calculateAccuracy(offsetMs, judgeOverride) {
     const absOffset = Math.abs(offsetMs);
     if (typeof math === 'undefined' || !math.erf) return 0;
 
-    // Scaling Logic for Accuracy
-    // Formula: Scale = ( (10 - Diff) / 6 ) ^ 0.75
-    // Note: Diff is clamped 4-9 usually, but let's be safe.
-    let diff = userConfig.judgeDifficulty || 4;
+    let diff = judgeOverride !== undefined ? judgeOverride : (userConfig.judgeDifficulty || 4);
     diff = Math.max(4, Math.min(9, diff));
 
     // Linear Fraction (same as Hit Windows)
@@ -1935,11 +1994,78 @@ function calculateAccuracy(offsetMs) {
     else return -275;
 }
 
-function getGrade(percentage) {
-    if (percentage >= 99.9935) return "AAAAA"; if (percentage >= 99.955) return "AAAA";
-    if (percentage >= 99.7) return "AAA"; if (percentage >= 93) return "AA";
-    if (percentage >= 80) return "A"; if (percentage >= 70) return "B";
-    if (percentage >= 60) return "C"; return "D";
+function getGrade(percentage, scoreOverride, j) {
+    const sys = modConfig.scoringSystem;
+    if (gameState.failed) return (sys === 'ddr') ? "E" : "F";
+    const score = (scoreOverride !== undefined) ? scoreOverride : getCosmeticScore();
+
+    if (sys === 'wife3') {
+        if (percentage >= 99.9935) return "AAAAA";
+        if (percentage >= 99.955) return "AAAA";
+        if (percentage >= 99.7) return "AAA";
+        if (percentage >= 93) return "AA";
+        if (percentage >= 80) return "A";
+        if (percentage >= 70) return "B";
+        if (percentage >= 60) return "C";
+        return "D";
+    }
+    if (sys === 'itg') {
+        if (percentage >= 100) return "****";
+        if (percentage >= 99) return "***";
+        if (percentage >= 98) return "**";
+        if (percentage >= 96) return "*";
+        if (percentage >= 94) return "S+";
+        if (percentage >= 92) return "S";
+        if (percentage >= 89) return "S-";
+        if (percentage >= 86) return "A+";
+        if (percentage >= 83) return "A";
+        if (percentage >= 80) return "A-";
+        if (percentage >= 76) return "B+";
+        if (percentage >= 72) return "B";
+        if (percentage >= 68) return "B-";
+        if (percentage >= 64) return "C+";
+        if (percentage >= 60) return "C";
+        if (percentage >= 55) return "C-";
+        return "D";
+    }
+    if (sys === 'ddr') {
+        if (score >= 990000) return "AAA";
+        if (score >= 950000) return "AA+";
+        if (score >= 900000) return "AA";
+        if (score >= 890000) return "AA-";
+        if (score >= 850000) return "A+";
+        if (score >= 800000) return "A";
+        if (score >= 790000) return "A-";
+        if (score >= 750000) return "B+";
+        if (score >= 700000) return "B";
+        if (score >= 690000) return "B-";
+        if (score >= 650000) return "C+";
+        if (score >= 600000) return "C";
+        if (score >= 590000) return "C-";
+        if (score >= 550000) return "D+";
+        return "D";
+    }
+    if (sys === 'sm') {
+        if (percentage >= 100) {
+            const tapSum = j.marvelous + j.perfect + j.great + j.good + j.bad + j.miss;
+            if (j.marvelous === tapSum) return "AAAA";
+            return "AAA";
+        }
+        if (percentage >= 93) return "AA";
+        if (percentage >= 80) return "A";
+        if (percentage >= 70) return "B";
+        if (percentage >= 60) return "C";
+        return "D";
+    }
+    if (sys === 'osu') {
+        if (percentage >= 100) return "SS";
+        if (percentage >= 95) return "S";
+        if (percentage >= 90) return "A";
+        if (percentage >= 80) return "B";
+        if (percentage >= 70) return "C";
+        return "D";
+    }
+    return "D";
 }
 function getGradeColor(grade) { return GRADE_COLORS[grade] || "#888"; }
 
@@ -1949,9 +2075,16 @@ function calculateSSR(difficulty, accuracyDec) {
     else return difficulty * (1 + 15 * Math.pow(accuracyDec - 0.93, 2));
 }
 
-function getClearType() {
-    if (gameState.failed) return "Failed";
-    const j = gameState.judgments;
+function getClearType(overrideJ, overrideFailed, overrideAcc, overridePaused) {
+    const isFailed = overrideFailed !== undefined ? overrideFailed : gameState.failed;
+    if (isFailed) return "Failed";
+
+    const acc = overrideAcc !== undefined ? overrideAcc : (gameState.accumulatedAccuracyPoints / (gameState.totalNotesHitOrMissed || 1));
+    const paused = overridePaused !== undefined ? overridePaused : gameState.hasPausedDuringPlay;
+
+    if (acc < 83 || paused) return "Invalid";
+
+    const j = overrideJ || gameState.judgments;
     const breaks = j.good + j.bad + j.miss + j.ng;
     const tapSum = j.marvelous + j.perfect + j.great + j.good + j.bad + j.miss;
     if (j.marvelous === tapSum && breaks === 0 && j.perfect === 0) return "MFC";
@@ -1969,17 +2102,48 @@ function getClearType() {
 function updateScoreDisplay() {
     let acc = 0;
     const count = gameState.totalNotesHitOrMissed || 1;
-    // accumulatedAccuracyPoints is sum of 0-100 scores.
-    // Average Score = Sum / Count (e.g. 99.5)
-    // Acc Fraction (for grade/display logic expecting 0.0-1.0) = Avg / 100.
+    const sys = modConfig.scoringSystem;
+    const j = gameState.judgments;
+
     if (gameState.totalNotesHitOrMissed > 0) {
-        acc = (gameState.accumulatedAccuracyPoints / count) / 100;
+        if (sys === 'wife3') {
+            acc = (gameState.accumulatedAccuracyPoints / count) / 100;
+        } else if (sys === 'itg') {
+            const points = j.marvelous * 5 + j.perfect * 4 + j.great * 2 + j.good * 0 + j.bad * -6 + j.miss * -12;
+            acc = points / (count * 5);
+        } else if (sys === 'ddr') {
+            const points = j.marvelous * 3 + j.perfect * 2 + j.great * 1;
+            acc = points / (count * 3);
+        } else if (sys === 'sm') {
+            const points = (j.marvelous + j.perfect) * 2 + j.great * 1 + j.good * 0 + j.bad * -4 + (j.miss + j.ng) * -8;
+            acc = points / (count * 2);
+        } else if (sys === 'osu') {
+            const points = 3 * (j.marvelous + j.perfect) + 2 * j.great + 1 * j.good + 0.5 * j.bad;
+            acc = points / (count * 3);
+        }
     }
-    const displayScore = Math.round(gameState.score);
+    const displayScore = getCosmeticScore();
     const displayAccPercent = (acc * 100).toFixed(4);
+    const dpPoints = (acc * (gameState.totalNotesInChart * 2)).toFixed(2);
 
     setText('accuracy', displayAccPercent + "%");
-    setText('score', displayScore);
+    // Technical DP removed from gameplay HUD per user request
+    setText('hud-dp', displayScore.toLocaleString());
+
+    if (modConfig.accuracyAttack !== 'off' && gameState.totalNotesHitOrMissed > 0) {
+        const target = modConfig.targetTrackerVal / 100;
+        if (modConfig.accuracyAttack === 'standard') {
+            if (acc < target) triggerFail();
+        } else if (modConfig.accuracyAttack === 'max') {
+            const remainingNotes = gameState.totalNotesInChart - gameState.totalNotesHitOrMissed;
+            const maxPossiblePoints = gameState.accumulatedAccuracyPoints + (remainingNotes * 100);
+            const maxPossibleAcc = (maxPossiblePoints / (gameState.totalNotesInChart * 100));
+
+            if (maxPossibleAcc < target - 0.00001) { // Floating point safety
+                triggerFail();
+            }
+        }
+    }
 
     let comboEl = uiCache['combo'];
     if (!comboEl) { comboEl = document.getElementById('combo'); uiCache['combo'] = comboEl; }
@@ -2038,11 +2202,61 @@ function updateScoreDisplay() {
 
     setText('life-percent', gameState.life.toFixed(1) + "%");
 
+    const lifeContainer = document.getElementById('life-container');
+    const flareInd = document.getElementById('flare-indicator');
+    if (lifeContainer) {
+        // Clear previous mode classes
+        lifeContainer.classList.remove('life-bar-life4', 'life-bar-risky', 'life-bar-flare-ex', 'life-bar-flare-neo');
+
+        if (modConfig.lifeSystem === 'life4') {
+            lifeContainer.classList.add('life-bar-life4');
+            const bars = Math.ceil(gameState.life / 25);
+            setText('life-percent', bars + " BARS");
+        } else if (modConfig.lifeSystem === 'risky') {
+            lifeContainer.classList.add('life-bar-risky');
+            if (flareInd) {
+                flareInd.innerText = "HAZARD";
+                flareInd.style.display = 'block';
+            }
+            setText('life-percent', ""); // Clear percentage for Hazard
+        } else if (modConfig.lifeSystem === 'flare') {
+            const level = modConfig.flareLevel || 'IX';
+            if (level === 'EX') lifeContainer.classList.add('life-bar-flare-ex');
+            else if (level === 'NEO') lifeContainer.classList.add('life-bar-flare-neo');
+
+            if (flareInd) {
+                flareInd.innerText = "FLARE " + level;
+                flareInd.style.display = 'block';
+            }
+        } else {
+            if (flareInd) flareInd.style.display = 'none';
+        }
+    }
+
     let lifeEl = uiCache['life-bar-fill'];
     if (!lifeEl) { lifeEl = document.getElementById('life-bar-fill'); uiCache['life-bar-fill'] = lifeEl; }
-    if (lifeEl) lifeEl.style.height = gameState.life + "%";
+    if (lifeEl) {
+        lifeEl.style.height = gameState.life + "%";
 
-    const grade = getGrade(acc * 100);
+        // Flare Gradations
+        if (modConfig.lifeSystem === 'flare') {
+            const level = modConfig.flareLevel || 'IX';
+            const flareMap = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9 };
+            if (level === 'EX' || level === 'NEO') {
+                lifeEl.style.background = '#ff0000';
+            } else {
+                const step = flareMap[level] || 9;
+                const saturation = (step / 9) * 100;
+                const lightness = 100 - (step / 9) * 50;
+                lifeEl.style.background = `hsl(0, ${saturation}%, ${lightness}%)`;
+            }
+        } else {
+            // Restore default gradient if not flare
+            lifeEl.style.background = 'linear-gradient(to top, #ff3333, #ffff00, #00ff00)';
+        }
+    }
+
+    const grade = getGrade(acc * 100, displayScore, j);
     let gEl = uiCache['live-grade'];
     if (!gEl) { gEl = document.getElementById('live-grade'); uiCache['live-grade'] = gEl; }
     if (gEl) { gEl.innerText = grade; gEl.style.color = getGradeColor(grade); }
@@ -2078,6 +2292,7 @@ function triggerFail() {
     setTimeout(() => {
         document.getElementById('failed-overlay').classList.remove('visible');
         document.getElementById('failed-overlay').style.display = 'none';
+        saveScore();
         showResults();
     }, 2500); // 2s fade + 0.5s hold
 }
@@ -2157,22 +2372,22 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
             // Hit Logic
             if (absOffset <= getTimingWindow('marvelous')) {
                 judgeText = "MARVELOUS"; judgeClass = "judge-marvelous"; breaksCombo = false;
-                scoreAdd = (1000000 / Math.max(1, gameState.totalNotesInChart));
+                scoreAdd = 1000;
                 gameState.judgments.marvelous++; lifeChange = 1.0 * gainMult;
             }
             else if (absOffset <= getTimingWindow('perfect')) {
                 judgeText = "PERFECT"; judgeClass = "judge-perfect"; breaksCombo = false;
-                scoreAdd = (1000000 / Math.max(1, gameState.totalNotesInChart)) - 10;
+                scoreAdd = 900;
                 gameState.judgments.perfect++; lifeChange = 0.8 * gainMult;
             }
             else if (absOffset <= getTimingWindow('great')) {
                 judgeText = "GREAT"; judgeClass = "judge-great"; breaksCombo = false;
-                scoreAdd = ((1000000 / Math.max(1, gameState.totalNotesInChart)) - 10) * 0.6;
+                scoreAdd = 500;
                 gameState.judgments.great++; lifeChange = 0.4 * gainMult;
             }
             else if (absOffset <= getTimingWindow('good')) {
                 judgeText = "GOOD"; judgeClass = "judge-good"; breaksCombo = true;
-                scoreAdd = ((1000000 / Math.max(1, gameState.totalNotesInChart)) - 10) * 0.2;
+                scoreAdd = 200;
                 gameState.judgments.good++; lifeChange = 0.0;
             }
             else if (absOffset <= getTimingWindow('bad')) {
@@ -2197,29 +2412,9 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         if (gameState.isAutoplay) {
             accScore = -75000;
         } else if (isMiss && note.type !== 'mine') {
-            // For Miss, we pass a large offset or handle explicitly?
-            // calculateAccuracy returns -275 for > 180ms.
-            // Miss window is 180ms usually. 
-            // Let's rely on a proxy offset or just hardcode the miss penalty from the function?
-            // calculateAccuracy(181) -> -275 approx.
-            accScore = calculateAccuracy(1000); // effectively infinite -> -275
+            accScore = calculateAccuracy(1000);
         } else if (note.type === 'mine') {
-            accScore = -500; // Keep mine separate? Or use calculateAccuracy? Mine logic usually distinct.
-            // Previous code: accumulatedAccuracyPoints += -7.0; 
-            // Let's keep -7.0 for Mine as it's not timed usually in the same curve way?
-            // User wants "Accuracy" generally. 
-            // Let's use the explicit value for mine to preserve existing logic if calculateAccuracy doesn't cover mines (it checks timing).
-            // calculateAccuracy checks offset. Mine hit offset < 75. 
-            // If we used it, we'd get positive points for hitting a mine (bad!).
-            // So hardcode Mine penalty.
-            accScore = -500; // Wait, previous was -7.0 acc points. 
-            // Note: -500 was scoreAdd.
-            // accPoints was -7.
-            // We need to scale -7 to the new 0-100 system?
-            // Old system: Max 3. -7 is ~ -2.3x Max.
-            // New system: Max 100. -2.3x = -230.
-            // Let's use -230 for Mine accumulator.
-            accScore = -230;
+            accScore = -350; // Corrected mine penalty
         } else {
             accScore = calculateAccuracy(offsetMs);
         }
@@ -2227,6 +2422,35 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
         gameState.accumulatedAccuracyPoints += accScore;
         gameState.totalNotesHitOrMissed++;
         scoreAdd = Math.max(0, scoreAdd); gameState.score += scoreAdd;
+
+        // OSU!MANIA SCORING IMPLEMENTATION
+        if (modConfig.scoringSystem === 'osu') {
+            const osuValues = {
+                "MARVELOUS": { val: 320, bVal: 32, bonus: 2, punish: 0 },
+                "PERFECT": { val: 300, bVal: 32, bonus: 1, punish: 0 },
+                "GREAT": { val: 200, bVal: 16, bonus: 0, punish: 8 },
+                "GOOD": { val: 100, bVal: 8, bonus: 0, punish: 24 },
+                "BAD": { val: 50, bVal: 4, bonus: 0, punish: 44 },
+                "MISS": { val: 0, bVal: 0, bonus: 0, punish: 100 } // Miss resets bonus
+            };
+            const v = osuValues[judgeText] || osuValues["MISS"];
+
+            // Update Bonus
+            if (judgeText === "MISS") {
+                gameState.osuBonus = 0;
+            } else {
+                gameState.osuBonus = Math.max(0, Math.min(100, gameState.osuBonus + v.bonus - v.punish));
+            }
+
+            const totalNotes = gameState.totalNotesInChart || 1;
+            const maxScore = 1000000;
+            const multiplier = (maxScore * 0.5) / totalNotes;
+
+            const baseNoteScore = multiplier * (v.val / 320);
+            const bonusNoteScore = multiplier * (v.bVal * Math.sqrt(gameState.osuBonus) / 320);
+
+            gameState.osuScore += (baseNoteScore + bonusNoteScore);
+        }
 
         if (!isMiss && (note.type === 'hold' || note.type === 'roll')) {
             note.holdState = 'active'; note.processed = false;
@@ -2252,7 +2476,35 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
 
     if (breaksCombo) gameState.combo = 0; else if (note.type !== 'mine') gameState.combo++;
     if (gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
-    gameState.life = Math.max(0, Math.min(100, gameState.life + lifeChange));
+
+    if (modConfig.lifeSystem === 'normal') {
+        gameState.life = Math.max(0, Math.min(100, gameState.life + lifeChange));
+    } else if (modConfig.lifeSystem === 'life4') {
+        if (breaksCombo) {
+            gameState.lifeBreaks++;
+            gameState.life = Math.max(0, 100 - (gameState.lifeBreaks * 25));
+            if (gameState.lifeBreaks >= 4) triggerFail();
+        }
+    } else if (modConfig.lifeSystem === 'risky') {
+        if (breaksCombo) {
+            gameState.life = 0;
+            gameState.lifeBreaks++;
+            triggerFail();
+        }
+    } else if (modConfig.lifeSystem === 'flare') {
+        const level = modConfig.flareLevel || 'IX';
+        const table = FLARE_DMG[level];
+        let dmg = 0;
+        if (isMiss) dmg = table.miss;
+        else if (note.type === 'mine') dmg = table.mine;
+        else {
+            const jText = judgeText.toLowerCase();
+            dmg = table[jText] || 0;
+        }
+        gameState.life = Math.max(0, gameState.life - dmg);
+        if (gameState.life <= 0) triggerFail();
+    }
+
     gameState.lifeHistory.push({ time: audioCtx.currentTime - gameState.startTime, val: gameState.life });
     gameState.comboHistory.push({ time: audioCtx.currentTime - gameState.startTime, val: gameState.combo });
 
@@ -2333,6 +2585,7 @@ function triggerJudgement(note, offsetMs, isMiss = false) {
             return; // Skip results screen, let loop handle restart
         }
 
+        saveScore();
         if (gameState.failed) showResults();
         else setTimeout(showResults, 2000);
     }
@@ -2656,62 +2909,12 @@ function sortLeaderboard(a, b) {
 
 function handleLeaderboard() {
     const key = `webSM_lb_${gameState.meta.title}_${gameState.chart.difficulty}`;
+    const saved = localStorage.getItem(key);
     let lb = [];
-    try { lb = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { }
-
-    // Correct Acc Logic: Accumulated (0-100) / Count = Avg Score (0-100)
-    // entry.acc expects "99.50" string.
-    const count = gameState.totalNotesHitOrMissed || 1;
-    const accPct = gameState.totalNotesHitOrMissed > 0 ? gameState.accumulatedAccuracyPoints / count : 0;
-
-    // DP Score Logic: (Acc% / 100) * (Total * 2)
-    const total = gameState.totalNotesInChart || 1;
-    const dpScoreVal = (accPct / 100) * (total * 2);
-
-    // Calc Stats
-    // J4 Normalization for Save
-    const baseNoteScore = 1000000 / Math.max(1, gameState.totalNotesInChart || 1);
-    const j4Stats = recalculateStatsInternal(gameState.detailedHits, 4, baseNoteScore);
-    const j4DpVal = (j4Stats.acc / 100) * (gameState.totalNotesInChart * 2);
-
-    // Calc Stats (Use J4 for Validity/SSR)
-    const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
-
-    // Strict J4 Validation
-    let fcType = getFCType(j4Stats.judgments, j4Stats.grade);
-    let ssr = calculateSSR(diff, j4Stats.acc / 100);
-
-    if (gameState.failed) {
-        fcType = "Fail";
-        ssr = 0;
-    } else if (j4Stats.acc < 83 || gameState.hasPausedDuringPlay) {
-        fcType = "Invalid"; // Invalid if J4 < 83%
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        lb = Array.isArray(parsed) ? parsed : [parsed];
     }
-    // Note: Played 'accPct' is still saved as 'acc', but validity relies on J4.
-
-    const entry = {
-        score: Math.round(gameState.score),
-        dpScore: dpScoreVal.toFixed(2), // Save DP Score calculated from Acc
-        grade: gameState.failed ? "F" : getGrade(accPct),
-        acc: accPct.toFixed(4), // Save 0-100 directly
-        date: Date.now(),
-        rate: (typeof modConfig !== 'undefined' ? modConfig.rate : 1.0),
-        sd: calculateSD(gameState.hitOffsets).toFixed(2),
-        judgments: gameState.judgments,
-        ssr: ssr,
-        fcType: fcType,
-        // New Metadata
-        judgeDiff: userConfig.judgeDifficulty || 4,
-        j4Acc: j4Stats.acc.toFixed(4),
-        j4Dp: j4DpVal.toFixed(2)
-    };
-
-    lb.push(entry);
-    // Sort logic
-    lb.sort(sortLeaderboard);
-
-    lb = lb.slice(0, 10);
-    localStorage.setItem(key, JSON.stringify(lb));
 
     const list = document.getElementById('leaderboard-list');
     if (list) {
@@ -2734,6 +2937,7 @@ function handleLeaderboard() {
 
             div.innerHTML = `
                 <span class="lb-rank">#${i + 1}</span>
+                <span class="lb-clear" style="color:${CLEAR_COLORS[entry.clearType] || '#fff'}; font-weight:bold; font-size:0.7em; text-transform:uppercase;">${entry.clearType || ""}</span>
                 <span class="lb-score">${displayScore}</span>
                 <span class="lb-grade">${entry.grade}${jBadge}</span>
                 <span class="lb-acc">${origAcc}</span>
@@ -2804,9 +3008,11 @@ function showResults() {
 
     // Fail Logic Update
     if (gameState.failed) {
-        // If failed, Acc is calculated over the ENTIRE chart.
-        const totalMaxScore = (gameState.totalNotesInChart || 1) * 100;
-        baseAcc = (gameState.accumulatedAccuracyPoints / totalMaxScore) * 100;
+        // Correct Fail Accuracy: (EarnedPts + MissingNotesPenalty) / (TotalNotes * 100)
+        const totalPossiblePoints = gameState.totalNotesInChart * 100;
+        const missingNotes = Math.max(0, gameState.totalNotesInChart - gameState.totalNotesHitOrMissed);
+        const penalty = missingNotes * -275;
+        baseAcc = ((gameState.accumulatedAccuracyPoints + penalty) / totalPossiblePoints) * 100;
     }
 
     const accPct = baseAcc;
@@ -2847,16 +3053,10 @@ function showResults() {
     const diff = gameState.difficultyStats ? gameState.difficultyStats.overall : 0;
 
     // Determine Clear Type and SSR
-    let clearType = getClearType();
+    let clearType = getClearType(gameState.judgments, gameState.failed, accPct, gameState.hasPausedDuringPlay);
     let ssr = calculateSSR(diff, accFraction);
 
-    if (gameState.failed) {
-        clearType = "Fail";
-        ssr = 0;
-    } else if (accPct < 83 || gameState.hasPausedDuringPlay) {
-        // Legacy: Check if we need to set Invalid
-        clearType = "Invalid";
-    }
+    if (gameState.failed) ssr = 0;
 
     setText('res-clear-type', getClearText(clearType));
     if (document.getElementById('res-clear-type')) {
@@ -2886,7 +3086,8 @@ function showResults() {
         }
     }
 
-    const grade = gameState.failed ? "F" : getGrade(accPct);
+    const cosmeticScore = getCosmeticScore();
+    const grade = getGrade(accPct, cosmeticScore, gameState.judgments);
     const gradeEl = document.getElementById('res-grade');
     if (gradeEl) {
         gradeEl.innerText = grade;
@@ -2894,14 +3095,14 @@ function showResults() {
         gradeEl.style.textShadow = `0 0 30px ${getGradeColor(grade)} `;
     }
     setText('res-acc', accPct >= 99.70 ? accPct.toFixed(4) + "%" : accPct.toFixed(2) + "%");
-    setText('res-score', Math.round(gameState.score).toLocaleString());
+    setText('res-score', dpPoints.toFixed(2));
 
     // Max DP is 2 * Total (Cumulative)
     const maxDP = total * 2;
     const resDpEl = document.getElementById('res-dp');
     if (resDpEl) {
-        // dpPoints calculated above.
-        resDpEl.innerHTML = `${dpPoints.toFixed(2)} <span style="font-size:0.75em; color:#888;">/ ${maxDP.toFixed(2)}</span>`;
+        // Now displaying Cosmetic Score here per user request
+        resDpEl.innerText = cosmeticScore.toLocaleString();
     }
 
     const ssrEl = document.getElementById('res-ssr');
@@ -2929,7 +3130,6 @@ function showResults() {
         setText(`res-pct-${type}`, `${pct}%`);
     };
     ['marvelous', 'perfect', 'great', 'good', 'bad', 'miss', 'ok', 'ng'].forEach(updateJudgeRes);
-    saveScore(); // Ensure score is saved!
 
     handleLeaderboard();
     drawOffsetGraph();
@@ -3110,6 +3310,7 @@ function viewScoreResults(entry) {
 
     // Hydrate
     gameState.score = entry.score;
+    gameState.osuScore = entry.osuScore || 0;
     gameState.judgments = entry.judgments || { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0, ok: 0, ng: 0, mine: 0 };
     gameState.maxCombo = entry.maxCombo || 0;
 
@@ -4682,7 +4883,8 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         score: 0,
         combo: 0,
         maxCombo: 0,
-        life: 50,
+        life: (modConfig.lifeSystem === 'normal') ? 50 : 100,
+        lifeBreaks: 0,
         judgments: { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0, ok: 0, ng: 0, mine: 0 },
         accuracyHistory: [],
         lifeHistory: [],
@@ -4712,6 +4914,9 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         currentNPS: 0,
         currentNPS: 0,
         peakNPS: 0,
+        osuScore: 0,
+        osuBonus: 100,
+        replayLog: [],
         bpmTimes: [], // Pre-calculated time-based BPM segments
         isAutoplay: !!window.isAutoplayLaunch, // Set Autoplay State
         isReplay: !!window.isReplayLaunch,
@@ -4727,9 +4932,14 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     // TARGET TRACKER INIT
     gameState.targetTrackerPB = 0;
     if (modConfig.targetTracker && modConfig.targetTrackerMode === 'pb') {
-        const key = `webSM_lb_${meta.title}_${chartInfo.difficulty} `;
+        const key = `webSM_lb_${meta.title}_${chartInfo.difficulty}`;
         try {
-            const lb = JSON.parse(localStorage.getItem(key)) || [];
+            const saved = localStorage.getItem(key);
+            let lb = [];
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                lb = Array.isArray(parsed) ? parsed : [parsed];
+            }
             if (lb.length > 0 && lb[0].acc) {
                 gameState.targetTrackerPB = parseFloat(lb[0].acc);
             } else {
@@ -5703,58 +5913,89 @@ function recalculateStatsDetailed(detailedHits, judgeDiff) {
 let lastDetailedHits = [];
 
 function saveScore(forceFail = false) {
-    if (gameState.isAutoplay) return; // Don't save autoplay
+    if (gameState.isAutoplay) return;
 
-    // Normalize to Judge 4
-    // We need to use `calculateStatsFromOffsets` logic but integrated properly.
-    // Let's implement the logic inline or use a robust helper.
-    // Since `calculateStatsDetailed` above relies on scope vars (baseNoteScore), let's fix that.
+    const song = songLibrary[selectedSongIndex];
+    if (!song) return;
+    const chart = song.charts[selectedChartIndex];
+    if (!chart) return;
 
+    // 1. Calculate J4 Stats (Normalized for Leaderboard)
+    // baseNoteScore for J4 scoring logic
     const baseNoteScore = 1000000 / Math.max(1, gameState.totalNotesInChart || 1);
-
-    // 1. Calculate J4 Stats
-    // We pass `gameState.detailedHits`.
     const j4Stats = recalculateStatsInternal(gameState.detailedHits, 4, baseNoteScore);
 
-    // DP Score for Saved J4
-    // Formula: (Acc% / 100) * (Total * 2)
-    const total = gameState.totalNotesInChart || 1;
-    const dpVal = (j4Stats.acc / 100) * (total * 2);
+    // 2. Adjust Accuracy if Failed
+    let accuracyForLB = j4Stats.acc;
+    if (gameState.failed || forceFail) {
+        // If failed, accuracy is calculated over the ENTIRE chart.
+        // The notes already processed are in j4Stats.accPts (or derived).
+        // Let's manually sum penalties for remaining notes.
+        const remainingNotes = Math.max(0, gameState.totalNotesInChart - (j4Stats.count || 0));
+        const totalPossiblePoints = gameState.totalNotesInChart * 100;
 
+        // We need the accumulated points from j4 recalculation
+        // recalculateStatsInternal returns 'acc' which is (totalPts / count)
+        const earnedPts = j4Stats.acc * (j4Stats.count || 0);
+        const penaltyPts = remainingNotes * -275; // Wife3 Miss Penalty
+
+        accuracyForLB = ((earnedPts + penaltyPts) / totalPossiblePoints) * 100;
+    }
+
+    // 3. SSR Calculation
+    const diff = (chart.difficultyCalc && chart.difficultyCalc.overall) ? chart.difficultyCalc.overall : (parseFloat(chart.meter) || 0);
+    const ssr = calculateSSR(diff, accuracyForLB / 100);
+
+    // 4. Score Object
     const scoreObj = {
-        score: Math.round(j4Stats.score), // Rounded
-        dpScore: dpVal.toFixed(2), // Added derived DP
+        score: Math.round(j4Stats.score),
+        acc: accuracyForLB.toFixed(4),
+        ssr: parseFloat(ssr.toFixed(2)),
         judgments: j4Stats.judgments,
-        acc: j4Stats.acc.toFixed(4), // Ensure string format matches? Or number? Leaderboard expects string usually
-        grade: forceFail ? 'F' : j4Stats.grade,
+        grade: (gameState.failed || forceFail) ? (modConfig.scoringSystem === 'ddr' ? 'E' : 'F') : getGrade(accuracyForLB, j4Stats.score, j4Stats.judgments),
+        clearType: getClearType(j4Stats.judgments, gameState.failed || forceFail),
         maxCombo: gameState.maxCombo,
-        fcType: getFCType(j4Stats.judgments, forceFail ? 'F' : j4Stats.grade), // Need helper or inline
-        timestamp: Date.now(),
-        judgeDiff: userConfig.judgeDifficulty || 4, // METADATA: Saved usage diff
+        date: Date.now(),
+        timestamp: Date.now(), // Legacy support
+        dpScore: ((accuracyForLB / 100) * (gameState.totalNotesInChart * 2)).toFixed(2),
+        osuScore: Math.round(gameState.osuScore),
+        judgeDiff: 4, // Leaderboard is normalized to J4
         rate: (modConfig && modConfig.rate) ? modConfig.rate : 1.0,
-        detailedHits: gameState.detailedHits, // Save for future re-calc if needed
-        replayLog: gameState.replayLog // Save Replay Data
+        detailedHits: gameState.detailedHits,
+        replayLog: gameState.replayLog
     };
 
-    // Save to local storage
-    if (selectedSongIndex === -1 || selectedChartIndex === -1) return;
-    const song = songLibrary[selectedSongIndex];
-    const chart = song.charts[selectedChartIndex];
+    // 5. Save Score to Leaderboard (Array of top 10)
     const key = `webSM_lb_${song.meta.title}_${chart.difficulty}`;
 
     let lb = [];
-    try { lb = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { }
+    try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            lb = Array.isArray(parsed) ? parsed : [parsed];
+        }
+    } catch (e) { }
+
     lb.push(scoreObj);
-    // Sort? Usually handled by display.
-    try { localStorage.setItem(key, JSON.stringify(lb)); } catch (e) { console.warn("Score save failed", e); }
 
-    console.log("Saved Normalized Score (J4):", scoreObj);
+    // Sort by accuracy descending (Personal Best at top)
+    lb.sort((a, b) => parseFloat(b.acc) - parseFloat(a.acc));
 
-    // Store hits for Results Screen Toggling
+    // Keep only top 10
+    lb = lb.slice(0, 10);
+
+    try {
+        localStorage.setItem(key, JSON.stringify(lb));
+        console.log("Score Saved to Leaderboard. Placement:", lb.indexOf(scoreObj) + 1);
+    } catch (e) {
+        console.warn("Score save failed: storage full or restricted", e);
+    }
+
+    // Store hits for Results Screen re-judging
     lastDetailedHits = [...gameState.detailedHits];
 }
 
-// Helper to fully recalc stats (Self Contained)
 function recalculateStatsInternal(hits, judgeDiff, baseNoteScore) {
     let j = { marvelous: 0, perfect: 0, great: 0, good: 0, bad: 0, miss: 0, mine: 0, ok: 0, ng: 0 };
     let score = 0;
@@ -5773,45 +6014,27 @@ function recalculateStatsInternal(hits, judgeDiff, baseNoteScore) {
     const sGood = (baseNoteScore - 10) * 0.2;
 
     hits.forEach(h => {
-        const type = h.judge.toUpperCase();
-        if (type === 'MINE') { j.mine++; score -= 500; accPts += -230; count++; return; } // Scaled -7 -> -230
+        const type = (h.judge || "").toUpperCase();
+        if (type === 'MINE') { j.mine++; score -= 500; accPts += -230; count++; return; }
         if (type === 'OK') { j.ok++; return; }
-        if (type === 'NG') { j.ng++; accPts += -150; count++; return; } // Scaled -4.5? -150 approx (half miss)
+        if (type === 'NG') { j.ng++; accPts += -150; count++; return; }
         if (h.offset === null || type === 'MISS') { j.miss++; accPts += -275; count++; return; }
 
-        // Tap
-        const originalDiff = userConfig.judgeDifficulty;
-        userConfig.judgeDifficulty = judgeDiff;
-        try {
-            const pt = calculateAccuracy(h.offset);
-            accPts += pt;
-        } finally {
-            userConfig.judgeDifficulty = originalDiff;
-        }
-
-        // Buckets
         const abs = Math.abs(h.offset);
+        accPts += calculateAccuracy(h.offset, judgeDiff);
+
         if (abs <= wMarv) { j.marvelous++; score += sMarv; }
         else if (abs <= wPerf) { j.perfect++; score += sPerf; }
         else if (abs <= wGreat) { j.great++; score += sGreat; }
         else if (abs <= wGood) { j.good++; score += sGood; }
         else if (abs <= wBad) { j.bad++; score += 0; }
-        else { j.miss++; } // Missed window but processed as hit?
+        else { j.miss++; accPts -= 275; } // Safety if somehow offset > window in hits array
 
         count++;
     });
 
     const acc = count > 0 ? (accPts / count) : 0;
-
-    // Recalc Grade
-    let grade = 'F';
-    // Mapping from existing getGrade logic:
-    // AAAAA (99.9935), AAAA (99.955), AAA (99.0), AA (93.0), A (80.0), B (70.0), C (60.0), D (45.0)
-    // We should expose getGrade or dup it.
-    // Assuming getGrade exists globally
-    if (typeof getGrade === 'function') grade = getGrade(acc);
-
-    return { judgments: j, score: Math.max(0, score), acc: acc, grade: grade };
+    return { judgments: j, score: Math.max(0, score), acc: acc, count: count };
 }
 
 // Current Viewing Judge on Results SCreen
@@ -5890,8 +6113,12 @@ function renderFullLeaderboard() {
     if (!song || !chart) return;
 
     const key = `webSM_lb_${song.meta.title}_${chart.difficulty}`;
+    const saved = localStorage.getItem(key);
     let lb = [];
-    try { lb = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { }
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        lb = Array.isArray(parsed) ? parsed : [parsed];
+    }
 
     // Toggle Header
     const currentRate = (modConfig && modConfig.rate) ? modConfig.rate : 1.0;
@@ -6022,6 +6249,7 @@ function renderFullLeaderboard() {
                 <div style="display:flex; align-items:baseline; gap:10px;">
                     <span style="font-size:0.9rem; color:#ffd700; font-family:'Mochiy Pop One'; text-shadow:0 0 5px rgba(255, 215, 0, 0.5);">${ssrVal}</span>
                     <span class="ss-lb-score">${displayScore}</span>
+                    <span style="font-size:0.7em; color:${CLEAR_COLORS[entry.clearType] || '#00e5ff'}; margin-left:5px; text-transform:uppercase; font-weight:bold;">${entry.clearType || ""}</span>
                 </div>
                 <div style="display:flex; align-items:center; margin-left:auto;">
                     ${resBtn}
@@ -6036,7 +6264,6 @@ function renderFullLeaderboard() {
                         <span style="font-size:0.8rem; color:#aaa; margin-left:8px; border:1px solid #444; padding:1px 4px; border-radius:3px;">J${entry.judgeDiff || 4}</span>
                     </div>
                     <span class="ss-lb-acc">${parseFloat(entry.acc).toFixed(2)}%</span>
-                    <span style="font-size:0.7em; color:#aaa; margin-top:2px">${getClearText(entry.fcType || "")}</span>
                     <div style="font-size:0.75rem; color:#666; margin-top:4px; font-family:monospace;">${dateStr}</div>
                 </div>
                 <div class="ss-lb-judgments">

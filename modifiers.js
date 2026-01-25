@@ -58,7 +58,11 @@ const modConfig = {
     accel: {
         name: 'none', // 'boost', 'brake', 'wave'
         magnitude: 100
-    }
+    },
+    scoringSystem: 'wife3',
+    lifeSystem: 'normal',
+    flareLevel: 'IX',
+    accuracyAttack: 'off'
 };
 window.modConfig = modConfig; // Expose globally explicitly
 
@@ -194,7 +198,14 @@ function updateModifiersUI() {
 
     // --- EFFECTS ---
     updateToggle('mod-effect', modConfig.effect.name);
-    // updateToggle('mod-accel', modConfig.accel.name);
+
+    updateToggle('mod-scoring-system', modConfig.scoringSystem);
+    updateToggle('mod-life-system', modConfig.lifeSystem);
+    updateToggle('mod-flare-level-group', modConfig.flareLevel);
+    updateToggle('mod-acc-attack', modConfig.accuracyAttack);
+
+    const flareGroup = document.getElementById('mod-flare-level-group');
+    if (flareGroup) flareGroup.style.display = (modConfig.lifeSystem === 'flare') ? 'block' : 'none';
 }
 
 function updateToggle(containerId, activeVal) {
@@ -396,6 +407,11 @@ function setModifier(cat, val, subParam) {
     // Effect
     if (cat === 'effect') modConfig.effect.name = val;
 
+    if (cat === 'scoringSystem') modConfig.scoringSystem = val;
+    if (cat === 'lifeSystem') modConfig.lifeSystem = val;
+    if (cat === 'flareLevel') modConfig.flareLevel = val;
+    if (cat === 'accuracyAttack') modConfig.accuracyAttack = val;
+
     updateModifiersUI();
 }
 window.setModifier = setModifier;
@@ -433,7 +449,7 @@ function loadModifiers() {
             if (parsed.effect) modConfig.effect = parsed.effect;
 
             // Primitives
-            ['speedType', 'speedValue', 'failMode', 'pitchShift', 'scrollDirection', 'turn', 'targetTracker', 'targetTrackerMode', 'targetTrackerVal'].forEach(k => {
+            ['speedType', 'speedValue', 'failMode', 'pitchShift', 'scrollDirection', 'turn', 'targetTracker', 'targetTrackerMode', 'targetTrackerVal', 'scoringSystem', 'lifeSystem', 'flareLevel', 'accuracyAttack'].forEach(k => {
                 if (parsed[k] !== undefined) modConfig[k] = parsed[k];
             });
 
