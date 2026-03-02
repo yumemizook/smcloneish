@@ -1322,28 +1322,17 @@ function selectDifficulty(chartIndex) {
         setC('calc-jumpstream', calc.jumpstream);
         setC('calc-handstream', calc.handstream);
         setC('calc-chordjack', calc.chordjack);
+        setC('calc-jackspeed', calc.jackspeed);
         setC('calc-technical', calc.technical);
         setC('calc-stamina', calc.stamina);
 
-        // Top Skillsets (Up to 3, if >= 90% of overall)
-        const skills = [
-            { name: 'Stream', val: calc.stream },
-            { name: 'Jumpstream', val: calc.jumpstream },
-            { name: 'Handstream', val: calc.handstream },
-            { name: 'Chordjack', val: calc.chordjack },
-            { name: 'Technical', val: calc.technical },
-            { name: 'Stamina', val: calc.stamina }
-        ];
-        skills.sort((a, b) => b.val - a.val);
+        // Top Skillsets
         const tsContainer = document.getElementById('ss-top-skillsets');
         if (tsContainer) {
             tsContainer.innerHTML = '';
-            const threshold = calc.overall * 0.8;
-            const toShow = skills.slice(0, 3).filter(s => s.val >= threshold);
-            // If none are >= 80%, show the top one regardless
-            const selected = toShow.length > 0 ? toShow : [skills[0]];
-            selected.forEach(s => {
-                tsContainer.innerHTML += `<div class="top-skill-item"><span>${s.name}</span></div>`;
+            const top = calculateHighestPatterns(calc, 3);
+            top.forEach(p => {
+                tsContainer.innerHTML += `<div class="top-skill-item"><span>${p}</span></div>`;
             });
         }
 
@@ -1382,27 +1371,17 @@ function selectDifficulty(chartIndex) {
         setC('calc-jumpstream', calc.jumpstream);
         setC('calc-handstream', calc.handstream);
         setC('calc-chordjack', calc.chordjack);
+        setC('calc-jackspeed', calc.jackspeed);
         setC('calc-technical', calc.technical);
         setC('calc-stamina', calc.stamina);
 
-        // Top Skillsets (Fallback cached, up to 3 if >= 80%)
-        const skills = [
-            { name: 'Stream', val: calc.stream },
-            { name: 'Jumpstream', val: calc.jumpstream },
-            { name: 'Handstream', val: calc.handstream },
-            { name: 'Chordjack', val: calc.chordjack },
-            { name: 'Technical', val: calc.technical },
-            { name: 'Stamina', val: calc.stamina }
-        ];
-        skills.sort((a, b) => b.val - a.val);
+        // Top Skillsets
         const tsContainer = document.getElementById('ss-top-skillsets');
         if (tsContainer) {
             tsContainer.innerHTML = '';
-            const threshold = calc.overall * 0.8;
-            const toShow = skills.slice(0, 3).filter(s => s.val >= threshold);
-            const selected = toShow.length > 0 ? toShow : [skills[0]];
-            selected.forEach(s => {
-                tsContainer.innerHTML += `<div class="top-skill-item"><span>${s.name}</span></div>`;
+            const top = calculateHighestPatterns(calc, 3);
+            top.forEach(p => {
+                tsContainer.innerHTML += `<div class="top-skill-item"><span>${p}</span></div>`;
             });
         }
     }
@@ -1577,264 +1556,28 @@ function selectDifficulty(chartIndex) {
 }
 
 function calculateDetailedDifficulty(notes) {
-    if (!notes || notes.length === 0) return { overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0, nps: 0, peak: 0 };
+    if (!notes || notes.length === 0) return new SkillsetScores();
 
-    // Rate Mod: Scale logic by rate
     let rate = 1.0;
     if (typeof modConfig !== 'undefined' && modConfig.rate) rate = modConfig.rate;
 
-    const validNotes = notes.filter(n => n.type === 'tap' || n.type === 'hold' || n.type === 'roll');
-    if (validNotes.length === 0) return { overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0, nps: 0, peak: 0 };
+    const calc = new MinaCalc();
 
-    const rows = [];
-    let currentRow = { time: validNotes[0].time, beat: validNotes[0].beat, notes: [] };
-    for (let note of validNotes) {
-        if (Math.abs(note.time - currentRow.time) < 0.002) { currentRow.notes.push(note); }
-        else { rows.push(currentRow); currentRow = { time: note.time, beat: note.beat, notes: [note] }; }
-    }
-    rows.push(currentRow);
-    if (rows.length < 2) return { nps: 0, peak: 0, overall: 0, stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, stamina: 0 };
+    // Map notes to MinaNote format
+    const minaNotes = notes.map(n => {
+        // Convert column to bitmask
+        let mask = 0;
+        if (n.col === 0) mask = 1;
+        else if (n.col === 1) mask = 2;
+        else if (n.col === 2) mask = 4;
+        else if (n.col === 8) mask = 8; // Wait, column indices are 0-3 usually, but game.js might use others?
+        // Let's check parseNoteData... col is 0-3.
+        else mask = 1 << n.col;
 
-    let maxNPS = 0;
-    const streamStrains = [], jsStrains = [], hsStrains = [], cjStrains = [], techStrains = [];
-    // Max Strains for Stamina Calc
-    const maxStrains = [];
+        return new MinaNote(mask, n.time);
+    });
 
-    const windowSize = 1.0; let windowStart = rows[0].time; let windowIndex = 0;
-
-    // SCALING HELPERS for Snap Complexity
-    // 0 = Neutral (4th, 8th), 1 = Binary (16th, 32nd), 2 = Ternary (12th, 24th)
-    const getSnapType = (beat) => {
-        const b = beat % 1;
-        const isSnap = (d) => Math.abs(b * d - Math.round(b * d)) < 0.01;
-        if (isSnap(2)) return 0; // 4th (Red), 8th (Blue) -> Common/Neutral
-        if (isSnap(4)) return 1; // 16th (Yellow) -> Binary
-        if (isSnap(3)) return 2; // 12th (Purple) -> Ternary
-        if (isSnap(8)) return 1; // 32nd (Orange) -> Binary
-        if (isSnap(6)) return 2; // 24th (Pink) -> Ternary
-        if (isSnap(12)) return 2; // 48th (Cyan) -> Ternary
-        return 1; // Everything else (64th etc) treated as Binary variant for now
-    };
-
-    const getSnapWeight = (beat) => {
-        const b = beat % 1;
-        const isSnap = (d) => Math.abs(b * d - Math.round(b * d)) < 0.01;
-
-        if (isSnap(4)) return 1.0; // 4th, 8th, 16th (Common)
-        if (isSnap(3)) return 1.1; // 12th
-        if (isSnap(6)) return 1.2; // 24th
-        if (isSnap(8)) return 1.3; // 32nd
-        if (isSnap(12)) return 1.4; // 48th
-        if (isSnap(16)) return 1.5; // 64th
-        return 1.2; // Uncommon
-    };
-
-    while (windowIndex < rows.length) {
-        let noteCount = 0, chordCount = 0, handCount = 0, jackCount = 0;
-        const colCounts = [0, 0, 0, 0];
-        const buckets = new Set();
-
-        let complexitySum = 0;
-        let hasBinary = false;
-        let hasTernary = false;
-
-        let i = windowIndex;
-        while (i < rows.length && rows[i].time < windowStart + windowSize) {
-            const row = rows[i];
-            const rowNotes = row.notes;
-            noteCount += rowNotes.length;
-            rowNotes.forEach(n => {
-                if (n.col >= 0 && n.col < 4) colCounts[n.col]++;
-                buckets.add(Math.floor(n.time * 100)); // 10ms buckets
-            });
-
-            // Complexity Acummulation
-            complexitySum += getSnapWeight(row.beat || 0);
-
-            // Mixed Snap Detection
-            const type = getSnapType(row.beat || 0);
-            if (type === 1) hasBinary = true;
-            if (type === 2) hasTernary = true;
-
-            if (rowNotes.length >= 2) chordCount++;
-            if (rowNotes.length >= 3) handCount++;
-            if (i > 0) {
-                const prevCols = rows[i - 1].notes.map(n => n.col);
-                const currCols = rowNotes.map(n => n.col);
-                if (currCols.some(c => prevCols.includes(c))) jackCount++;
-            }
-            i++;
-        }
-
-        const nps = noteCount / windowSize;
-        if (nps > maxNPS) maxNPS = nps;
-
-        // Pattern Heuristics
-        let vibroFactor = 1.0;
-        let quadFactor = 1.0;
-        let rollFactor = 1.0;
-        let quantizedDensity = 0;
-        let concentration = 0;
-
-        const rowCount = i - windowIndex;
-        const jackFrequency = rowCount > 0 ? jackCount / rowCount : 0;
-        const chordFrequency = rowCount > 0 ? chordCount / rowCount : 0;
-
-        if (nps > 15) {
-            // Vibro
-            const sortedCounts = [...colCounts].sort((a, b) => b - a);
-            const top2 = sortedCounts[0] + sortedCounts[1];
-            concentration = noteCount > 0 ? top2 / noteCount : 0;
-            if (concentration > 0.8) {
-                vibroFactor = Math.max(0.6, 1.0 - (concentration - 0.8) * 2.0);
-            }
-
-            // Quadspam detection: Dense notes in few buckets
-            const effectiveRows = buckets.size || 1;
-            quantizedDensity = noteCount / effectiveRows;
-            if (quantizedDensity > 2.5) {
-                // Refinement: If it's heavy jacks (chordjack), we don't want to penalize as hard
-                // because it's actually difficult, not just vibro/quadspam.
-                const jackGrace = Math.min(0.3, jackFrequency * 0.5);
-                quadFactor = Math.max(0.4, 1.0 - (quantizedDensity - 2.5) * (1.0 - jackGrace));
-            }
-
-            // Roll/Speed Cap
-            if (nps > 30 && quantizedDensity < 1.6) {
-                rollFactor = 30.0 / nps;
-            }
-        }
-
-        const penalty = Math.min(vibroFactor, quadFactor, rollFactor);
-        const penalizedNPS = nps * penalty;
-
-
-        // Snap Complexity Factor (Average of row weights)
-        const avgComplexity = rowCount > 0 ? complexitySum / rowCount : 1.0;
-
-        // Mixed Snap Bonus
-        // If window contains both 16th-family and 12th-family notes, boost Tech
-        const mixedBonus = (hasBinary && hasTernary) ? 1.15 : 1.0;
-
-        let sStr = penalizedNPS * rate * avgComplexity; if (chordCount > 0) sStr *= 0.8; streamStrains.push(sStr);
-        let sJs = penalizedNPS * rate; const jumpRatio = noteCount > 0 ? (chordCount / (noteCount / 2)) : 0;
-        if (jumpRatio < 0.2) sJs *= 0.2; else sJs *= (0.8 + jumpRatio * 0.4); jsStrains.push(sJs);
-        let sHs = 0; if (handCount > 0) { sHs = (penalizedNPS * rate) * 0.9 + (handCount * 1.5); } hsStrains.push(sHs);
-
-        let sCj = penalizedNPS * rate * chordFrequency * jackFrequency;
-
-        // Tech with Snap Complexity & Mixed Bonus
-        let sTech = penalizedNPS * rate * (0.4 + jackFrequency) * avgComplexity * mixedBonus;
-
-        // Chordjack Bonus: Reward high-NPS dense chordjacks (35+ NPS)
-        if (nps > 30) {
-            const cjDensityBonus = Math.max(1.0, 1.0 + (nps - 30) * 0.01 * chordFrequency * jackFrequency);
-            sCj *= cjDensityBonus;
-            sTech *= (1 + (cjDensityBonus - 1) * 0.5); // Tech also gets half bonus
-        }
-
-        cjStrains.push(sCj);
-        techStrains.push(sTech);
-
-        // Max Strain for Stamina
-        maxStrains.push(Math.max(sStr, sJs, sHs, sCj, sTech));
-
-        windowStart += 0.5;
-        while (windowIndex < rows.length && rows[windowIndex].time < windowStart) windowIndex++;
-    }
-
-    const aggregate = (arr) => {
-        if (arr.length === 0) return 0; arr.sort((a, b) => b - a);
-        let weightedSum = 0, weightTotal = 0; const topCount = Math.min(arr.length, 16);
-        for (let i = 0; i < topCount; i++) { const w = Math.pow(0.9, i); weightedSum += arr[i] * w; weightTotal += w; }
-        if (weightTotal === 0) return 0; return weightedSum / weightTotal;
-    };
-
-    const sStream = aggregate(streamStrains); const sJS = aggregate(jsStrains); const sHS = aggregate(hsStrains);
-    const sCJ = aggregate(cjStrains); const sTech = aggregate(techStrains);
-
-    const duration = (rows[rows.length - 1].time - rows[0].time) / rate;
-
-    // New Stamina Logic
-    // 1. Find Peak Intensity
-    let staminaPeak = 0;
-    if (maxStrains.length > 0) {
-        // Use 95th percentile or something robust? Or just max?
-        // Let's use aggregate of top few to ignore spikes.
-        // Actually, aggregate(maxStrains) is a decent "Peak" proxy.
-        staminaPeak = aggregate([...maxStrains]);
-    }
-
-    // 2. Filter Active Windows (e.g. > 50% of peak)
-    // Using a lower threshold helps capture the "body" of the song.
-    const activeStrains = maxStrains.filter(s => s > staminaPeak * 0.5);
-
-    // 3. Average Density of Active Section
-    const avgDense = activeStrains.length > 0 ? activeStrains.reduce((a, b) => a + b, 0) / activeStrains.length : 0;
-
-    // 4. Duration of Active Section (Each window step is 0.5s)
-    const durationDense = activeStrains.length * 0.5;
-
-    // 5. Stamina Calculation
-    // Base tied to avgDense (so it's "tied to highest skillsets")
-    // Logarithmic bonus for duration. Start bonus at ~30s?
-    // If duration < 30s, multiplier ~1.0? 
-    // Formula: avgDense * (1 + 0.4 * log10(max(1, duration / 30)))
-    // If 30s: log(1) = 0 -> Multiplier 1.0. Stamina = avgDense.
-    // If 300s: log(10) = 1 -> Multiplier 1.4.
-    let sStamina = avgDense * (1 + 0.4 * Math.log10(Math.max(1, durationDense / 30)));
-
-    const scale = (val) => {
-        // 1. Calculate original value (Standard Saturation)
-        const original = 45 * (1 - Math.exp(-Math.pow(val / 25.5, 2.5)));
-
-        // 2. Define Cutoff for Tail Logic (Rating 30 approx val 26.5)
-        const cutoff = 30;
-        if (original <= cutoff) return original;
-
-        // 3. Linear Projection for Tail (Differentiation)
-        // Instead of using the saturated 'original', we project 'val' linearly from the cutoff point.
-        // val 26.5 -> 30. Slope 0.8 ensures good separation.
-        const tailInput = 30 + (val - 26.5) * 0.8;
-
-        // 4. Soft Cap Convergence
-        // We want to converge to (40 * Rate).
-        const softCapVal = 40 * rate;
-
-        // If Rate > 2.0, we basically remove the cap / make it very soft?
-        // User asked "remove hard cap", but also "converge to 40 soft cap".
-        // The Soft Cap formula naturally scales.
-        // We'll use a saturated rise to the Soft Cap.
-
-        const limit = Math.max(1, softCapVal - cutoff);
-        const input = tailInput - cutoff;
-
-        // Asymptotic decay to limit: Limit * (1 - exp(-x / stretch))
-        // Stretch factor determines how slowly we converge (higher = more linear space).
-        // limit * 1.5 gives a very smooth approach.
-        const mapped = cutoff + limit * (1 - Math.exp(-input / (limit * 1.5)));
-
-        // 5. Hard Cap Check
-        const hardCap = 60 * rate;
-        if (rate > 2.0) return mapped;
-        return Math.min(mapped, hardCap);
-    };
-    let result = {
-        nps: (validNotes.length / duration), peak: maxNPS * rate, stream: scale(sStream), jumpstream: scale(sJS),
-        handstream: scale(sHS), chordjack: scale(sCJ), technical: scale(sTech), stamina: scale(sStamina)
-    };
-    const skills = [result.stream, result.jumpstream, result.handstream, result.chordjack, result.technical, result.stamina];
-    skills.sort((a, b) => b - a);
-    let topSkills = skills.slice(0, 3);
-    // Conditional S3: If 3rd skill is too low (< 90% of 2nd), drop it.
-    if (topSkills.length === 3 && topSkills[2] < topSkills[1] * 0.9) {
-        topSkills.pop();
-    }
-    const sumSq = topSkills.reduce((a, b) => a + (b * b), 0);
-    const sum = topSkills.reduce((a, b) => a + b, 0);
-    let overall = sum > 0 ? sumSq / sum : 0;
-    result.overall = overall;
-    return result;
+    return calc.calcAtRate(minaNotes, rate);
 }
 
 

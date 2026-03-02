@@ -7,6 +7,7 @@
     <title>WebSM Rhythm Game</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="difficulty.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -99,13 +100,20 @@
                                             </div>
                                         </div>
                                         <div id="ss-note-counts" class="ss-note-counts">
-                                            <div class="nc-item"><span class="nc-label">Notes</span><span id="nc-notes" class="nc-val">0</span></div>
-                                            <div class="nc-item"><span class="nc-label">Jumps</span><span id="nc-jumps" class="nc-val">0</span></div>
-                                            <div class="nc-item"><span class="nc-label">Hands</span><span id="nc-hands" class="nc-val">0</span></div>
-                                            <div class="nc-item"><span class="nc-label">Holds</span><span id="nc-holds" class="nc-val">0</span></div>
-                                            <div class="nc-item"><span class="nc-label">Rolls</span><span id="nc-rolls" class="nc-val">0</span></div>
-                                            <div class="nc-item"><span class="nc-label">Mines</span><span id="nc-mines" class="nc-val">0</span></div>
-                                            <div class="nc-item"><span class="nc-label">Fakes</span><span id="nc-fakes" class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Notes</span><span id="nc-notes"
+                                                    class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Jumps</span><span id="nc-jumps"
+                                                    class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Hands</span><span id="nc-hands"
+                                                    class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Holds</span><span id="nc-holds"
+                                                    class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Rolls</span><span id="nc-rolls"
+                                                    class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Mines</span><span id="nc-mines"
+                                                    class="nc-val">0</span></div>
+                                            <div class="nc-item"><span class="nc-label">Fakes</span><span id="nc-fakes"
+                                                    class="nc-val">0</span></div>
                                         </div>
                                     </div>
                                 </div>
@@ -134,14 +142,22 @@
                             <div id="tab-breakdown" class="ss-tab-content" style="display:none;">
                                 <div class="ss-calc-box full-width">
                                     <h3>Difficulty Breakdown</h3>
-                                    <div class="calc-row highlight"><span>Overall</span> <span id="calc-overall">0.0</span></div>
+                                    <div class="calc-row highlight"><span>Overall</span> <span
+                                            id="calc-overall">0.0</span></div>
                                     <div class="calc-row"><span>Stream</span> <span id="calc-stream">0.0</span></div>
-                                    <div class="calc-row"><span>Jumpstream</span> <span id="calc-jumpstream">0.0</span></div>
-                                    <div class="calc-row"><span>Handstream</span> <span id="calc-handstream">0.0</span></div>
-                                    <div class="calc-row"><span>Chordjack</span> <span id="calc-chordjack">0.0</span></div>
-                                    <div class="calc-row"><span>Technical</span> <span id="calc-technical">0.0</span></div>
+                                    <div class="calc-row"><span>Jumpstream</span> <span id="calc-jumpstream">0.0</span>
+                                    </div>
+                                    <div class="calc-row"><span>Handstream</span> <span id="calc-handstream">0.0</span>
+                                    </div>
+                                    <div class="calc-row"><span>Chordjack</span> <span id="calc-chordjack">0.0</span>
+                                    </div>
+                                    <div class="calc-row"><span>Jackspeed</span> <span id="calc-jackspeed">0.0</span>
+                                    </div>
+                                    <div class="calc-row"><span>Technical</span> <span id="calc-technical">0.0</span>
+                                    </div>
                                     <div class="calc-row"><span>Stamina</span> <span id="calc-stamina">0.0</span></div>
-                                    <div class="calc-row" style="border-top:1px solid #444; padding-top:5px; margin-top:5px;">
+                                    <div class="calc-row"
+                                        style="border-top:1px solid #444; padding-top:5px; margin-top:5px;">
                                         <span>NPS</span> <span id="calc-nps">0.0</span>
                                     </div>
                                     <div class="calc-row"><span>Peak NPS</span> <span id="calc-peak">0.0</span></div>
