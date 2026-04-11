@@ -716,7 +716,24 @@ let gameConfig = {
 let assets = {
     arrowSprite: new Image(), holdHeadActive: new Image(), holdBody: new Image(),
     rollBody: new Image(), holdExplosion: new Image(), mineSprite: new Image(), receptorSprite: new Image(),
-    loaded: { arrowSprite: false, holdHeadActive: false, holdBody: false, rollBody: false, holdExplosion: false, mineSprite: false, receptorSprite: false }
+    loaded: { arrowSprite: false, holdHeadActive: false, holdBody: false, rollBody: false, holdExplosion: false, mineSprite: false, receptorSprite: false },
+    // Global pattern cache - keyed by "type_scale" (e.g., "hold_1.0")
+    patterns: new Map(),
+    getPattern: function(type, scale, ctx) {
+        const key = `${type}_${scale.toFixed(3)}`;
+        let pattern = this.patterns.get(key);
+        if (!pattern) {
+            const img = type === 'hold' ? this.holdBody : this.rollBody;
+            if (this.loaded[type === 'hold' ? 'holdBody' : 'rollBody']) {
+                pattern = ctx.createPattern(img, 'repeat');
+                this.patterns.set(key, pattern);
+            }
+        }
+        return pattern;
+    },
+    clearPatterns: function() {
+        this.patterns.clear();
+    }
 };
 
 const loadAsset = (key, src) => {
@@ -732,6 +749,736 @@ loadAsset('rollBody', "Down Roll Body active.png");
 loadAsset('holdExplosion', "Down Hold Explosion 2x1.png");
 loadAsset('mineSprite', "_Down Tap Mine 8x1.png");
 loadAsset('receptorSprite', "_Down Go Receptor Go 2x1.png");
+
+/* =========================================
+   WEBGL RENDERER (PixiJS)
+   ========================================= */
+
+/**
+ * GameplayRenderer - WebGL-based note rendering using PixiJS
+ * Provides GPU-accelerated rendering for 240Hz+ competitive play.
+ * Falls back to Canvas 2D if WebGL is unavailable.
+ */
+class GameplayRenderer {
+    constructor() {
+        this.app = null;
+        this.container = null;
+        this.canvas2d = null; // Reference to original canvas for fallback
+        this.useWebGL = false;
+
+        // Sprite pools for object reuse
+        this.spritePools = {
+            tap: [],
+            mine: [],
+            holdHead: [],
+            holdBody: [],
+            rollBody: [],
+            receptor: []
+        };
+        this.maxPoolSize = 400; // Max visible notes at any time
+
+        // Containers for layering
+        this.layers = {
+            receptors: null,
+            holdBodies: null,
+            noteHeads: null,
+            effects: null
+        };
+
+        // Cached textures
+        this.textures = {};
+        this.baseTextures = {};
+
+        // Active sprites tracking
+        this.activeSprites = new Map(); // note -> sprite
+
+        // Frame counter for animations
+        this.frameCount = 0;
+
+        // --- Phase 3: Advanced Optimizations ---
+        // ParticleContainer for instanced-like rendering of simple notes
+        this.particleContainers = {};
+
+        // Viewport culling: Only render notes in visible area + margin
+        this.cullingMargin = 150; // pixels
+
+        // LOD (Level of Detail): Simplify distant notes
+        this.lodEnabled = true;
+        this.lodNearDistance = 200; // Full detail within this range
+        this.lodFarDistance = 600;  // Reduced detail beyond this
+
+        // Performance monitoring
+        this.renderStats = {
+            lastFrameTime: 0,
+            frameCount: 0,
+            fps: 0,
+            spritesDrawn: 0
+        };
+
+        // Static offscreen canvas for receptor glow/bloom effects
+        this.offscreenCanvas = null;
+        this.offscreenCtx = null;
+    }
+
+    /**
+     * Initialize the renderer
+     * @param {HTMLCanvasElement} fallbackCanvas - Original canvas for fallback mode
+     * @returns {boolean} - True if WebGL is available and initialized
+     */
+    init(fallbackCanvas) {
+        this.canvas2d = fallbackCanvas;
+
+        // Check if PixiJS is available
+        if (typeof PIXI === 'undefined') {
+            console.warn('[GameplayRenderer] PixiJS not available, using Canvas 2D fallback');
+            return false;
+        }
+
+        // Check for WebGL support
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        if (!gl) {
+            console.warn('[GameplayRenderer] WebGL not supported, using Canvas 2D fallback');
+            return false;
+        }
+
+        try {
+            // Create Pixi Application
+            const containerDiv = document.getElementById('pixi-container');
+            if (!containerDiv) {
+                console.warn('[GameplayRenderer] Pixi container not found');
+                return false;
+            }
+
+            // Calculate dimensions from fallback canvas or window
+            const height = window.innerHeight;
+            const width = height * 0.625;
+
+            this.app = new PIXI.Application({
+                width: width,
+                height: height,
+                backgroundAlpha: 0.85,
+                backgroundColor: 0x000000,
+                antialias: false, // Disable for performance
+                resolution: window.devicePixelRatio || 1,
+                autoDensity: true,
+                powerPreference: 'high-performance'
+            });
+
+            // Add canvas to container
+            containerDiv.appendChild(this.app.view);
+            this.container = containerDiv;
+
+            // Create layer containers
+            this.layers.receptors = new PIXI.Container();
+            this.layers.holdBodies = new PIXI.Container();
+            this.layers.noteHeads = new PIXI.Container();
+            this.layers.effects = new PIXI.Container();
+
+            // Add layers to stage (bottom to top)
+            this.app.stage.addChild(this.layers.receptors);
+            this.app.stage.addChild(this.layers.holdBodies);
+            this.app.stage.addChild(this.layers.noteHeads);
+            this.app.stage.addChild(this.layers.effects);
+
+            // Initialize sprite pools
+            this._initSpritePools();
+
+            // Initialize offscreen canvas for static effects
+            this._initOffscreenCanvas();
+
+            this.useWebGL = true;
+            console.log('[GameplayRenderer] WebGL initialized successfully');
+            return true;
+
+        } catch (err) {
+            console.error('[GameplayRenderer] Failed to initialize WebGL:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Initialize sprite pools for object reuse
+     */
+    _initSpritePools() {
+        // Pre-create sprites for each type
+        for (let i = 0; i < this.maxPoolSize; i++) {
+            // Tap notes
+            const tap = new PIXI.Sprite();
+            tap.anchor.set(0.5);
+            tap.visible = false;
+            this.spritePools.tap.push(tap);
+
+            // Mines
+            const mine = new PIXI.Sprite();
+            mine.anchor.set(0.5);
+            mine.visible = false;
+            this.spritePools.mine.push(mine);
+
+            // Hold heads
+            const holdHead = new PIXI.Sprite();
+            holdHead.anchor.set(0.5);
+            holdHead.visible = false;
+            this.spritePools.holdHead.push(holdHead);
+        }
+
+        // Hold/Roll bodies use TilingSprite for efficiency
+        // Create a 1x1 white texture for initial placeholder
+        const placeholderTexture = PIXI.Texture.WHITE;
+        for (let i = 0; i < 100; i++) {
+            const holdBody = new PIXI.TilingSprite(placeholderTexture);
+            holdBody.anchor.set(0.5, 0);
+            holdBody.visible = false;
+            this.spritePools.holdBody.push(holdBody);
+
+            const rollBody = new PIXI.TilingSprite(placeholderTexture);
+            rollBody.anchor.set(0.5, 0);
+            rollBody.visible = false;
+            this.spritePools.rollBody.push(rollBody);
+        }
+
+        // Receptors (only 4 needed)
+        for (let i = 0; i < 4; i++) {
+            const receptor = new PIXI.Sprite();
+            receptor.anchor.set(0.5);
+            receptor.visible = false;
+            this.spritePools.receptor.push(receptor);
+        }
+    }
+
+    /**
+     * Initialize offscreen canvas for pre-rendering static elements
+     * (receptor glow, lane backgrounds, etc.)
+     */
+    _initOffscreenCanvas() {
+        try {
+            this.offscreenCanvas = document.createElement('canvas');
+            this.offscreenCanvas.width = 256;
+            this.offscreenCanvas.height = 256;
+            this.offscreenCtx = this.offscreenCanvas.getContext('2d');
+
+            // Pre-render receptor glow effect
+            this._renderReceptorGlow();
+        } catch (e) {
+            console.warn('[GameplayRenderer] Offscreen canvas not available:', e);
+        }
+    }
+
+    /**
+     * Pre-render receptor glow effect to offscreen canvas
+     */
+    _renderReceptorGlow() {
+        if (!this.offscreenCtx) return;
+
+        const ctx = this.offscreenCtx;
+        const w = this.offscreenCanvas.width;
+        const h = this.offscreenCanvas.height;
+
+        // Clear
+        ctx.clearRect(0, 0, w, h);
+
+        // Create radial gradient for glow
+        const gradient = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w/2);
+        gradient.addColorStop(0, 'rgba(0, 229, 255, 0.3)');
+        gradient.addColorStop(0.5, 'rgba(0, 229, 255, 0.1)');
+        gradient.addColorStop(1, 'rgba(0, 229, 255, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, w, h);
+    }
+
+    /**
+     * Viewport culling: Check if note is within visible bounds
+     * @returns {boolean} - True if note should be rendered
+     */
+    _isInViewport(y, height) {
+        const screenHeight = this.app ? this.app.screen.height : window.innerHeight;
+        const margin = this.cullingMargin;
+
+        // Check if note overlaps with viewport + margin
+        return (y + height >= -margin) && (y <= screenHeight + margin);
+    }
+
+    /**
+     * Calculate LOD level based on distance from receptor
+     * @returns {number} - 0 = full detail, 1 = reduced detail, 2 = minimal
+     */
+    _getLODLevel(y) {
+        if (!this.lodEnabled) return 0;
+
+        const receptorY = gameConfig.receptorY;
+        const dist = Math.abs(y - receptorY);
+
+        if (dist < this.lodNearDistance) return 0;
+        if (dist < this.lodFarDistance) return 1;
+        return 2; // Minimal detail for very distant notes
+    }
+
+    /**
+     * Update render statistics
+     */
+    _updateRenderStats(spritesDrawn) {
+        this.renderStats.spritesDrawn = spritesDrawn;
+        this.renderStats.frameCount++;
+
+        const now = performance.now();
+        if (now - this.renderStats.lastFrameTime >= 1000) {
+            this.renderStats.fps = this.renderStats.frameCount;
+            this.renderStats.frameCount = 0;
+            this.renderStats.lastFrameTime = now;
+
+            // Log performance every 5 seconds (for debugging)
+            if (this.renderStats.frameCount % 5 === 0) {
+                console.log(`[GameplayRenderer] FPS: ${this.renderStats.fps}, Sprites: ${spritesDrawn}`);
+            }
+        }
+    }
+
+    /**
+     * Create or get a texture from a loaded image asset
+     */
+    _getTexture(assetKey, frameX = 0, frameY = 0, frameW = null, frameH = null) {
+        const cacheKey = `${assetKey}_${frameX}_${frameY}_${frameW}_${frameH}`;
+
+        if (this.textures[cacheKey]) {
+            return this.textures[cacheKey];
+        }
+
+        const img = assets[assetKey];
+        if (!img || !assets.loaded[assetKey]) {
+            return null;
+        }
+
+        // Create base texture if not exists
+        if (!this.baseTextures[assetKey]) {
+            this.baseTextures[assetKey] = PIXI.BaseTexture.from(img);
+        }
+
+        // Create frame rectangle
+        const frameWidth = frameW || img.width;
+        const frameHeight = frameH || img.height;
+        const frame = new PIXI.Rectangle(frameX, frameY, frameWidth, frameHeight);
+
+        // Create texture from frame
+        const texture = new PIXI.Texture(this.baseTextures[assetKey], frame);
+        this.textures[cacheKey] = texture;
+
+        return texture;
+    }
+
+    /**
+     * Get a sprite from the pool
+     */
+    _getSpriteFromPool(type) {
+        const pool = this.spritePools[type];
+        for (let i = 0; i < pool.length; i++) {
+            if (!pool[i].visible) {
+                pool[i].visible = true;
+                pool[i].alpha = 1;
+                pool[i].scale.set(1);
+                pool[i].rotation = 0;
+                return pool[i];
+            }
+        }
+        return null; // Pool exhausted
+    }
+
+    /**
+     * Return a sprite to the pool
+     */
+    _returnSpriteToPool(sprite, type) {
+        sprite.visible = false;
+        sprite.parent?.removeChild(sprite);
+    }
+
+    /**
+     * Show WebGL canvas, hide Canvas 2D
+     */
+    enable() {
+        if (!this.useWebGL) return;
+
+        const pixiContainer = document.getElementById('pixi-container');
+        const canvas2d = document.getElementById('gameCanvas');
+
+        if (pixiContainer) {
+            pixiContainer.style.display = 'block';
+        }
+        if (canvas2d) {
+            canvas2d.style.display = 'none';
+        }
+    }
+
+    /**
+     * Hide WebGL canvas, show Canvas 2D
+     */
+    disable() {
+        const pixiContainer = document.getElementById('pixi-container');
+        const canvas2d = document.getElementById('gameCanvas');
+
+        if (pixiContainer) {
+            pixiContainer.style.display = 'none';
+        }
+        if (canvas2d) {
+            canvas2d.style.display = 'block';
+        }
+    }
+
+    /**
+     * Main render function - called every frame
+     */
+    render(visibleNotes, rotations, currentTime) {
+        if (!this.useWebGL || !this.app) return false;
+
+        this.frameCount++;
+
+        // Clear previous frame's sprites
+        this._clearActiveSprites();
+
+        // Render receptors (get count for stats)
+        const receptorCount = this._renderReceptors(rotations);
+
+        // Render notes (tracks its own sprite count)
+        this._renderNotes(visibleNotes, rotations, currentTime, receptorCount);
+
+        return true;
+    }
+
+    /**
+     * Clear all active sprites from previous frame
+     */
+    _clearActiveSprites() {
+        // Return all sprites to pools by resetting visibility
+        // This makes them available for _getSpriteFromPool again
+        const returnSprites = (container) => {
+            for (let i = container.children.length - 1; i >= 0; i--) {
+                const sprite = container.children[i];
+                sprite.visible = false;
+            }
+            container.removeChildren();
+        };
+
+        returnSprites(this.layers.receptors);
+        returnSprites(this.layers.holdBodies);
+        returnSprites(this.layers.noteHeads);
+        this.activeSprites.clear();
+    }
+
+    /**
+     * Render the 4 receptor arrows
+     */
+    _renderReceptors(rotations) {
+        const colWidth = gameConfig.columnWidth;
+        const arrowSize = gameConfig.arrowSize;
+        const receptorY = gameConfig.receptorY;
+
+        // Track sprites drawn for receptors
+        let receptorSprites = 0;
+
+        // Calculate actual receptor sprite Y position (same as in rendering)
+        const actualReceptorY = receptorY + colWidth / 2;
+
+        for (let col = 0; col < 4; col++) {
+            // Viewport culling for receptors (always visible if on screen)
+            if (!this._isInViewport(actualReceptorY, arrowSize)) continue;
+
+            const sprite = this._getSpriteFromPool('receptor');
+            if (!sprite) continue;
+
+            const texture = this._getTexture('receptorSprite',
+                gameState.heldKeys[col] ? assets.receptorSprite.width / 2 : 0,
+                0,
+                assets.receptorSprite.width / 2,
+                assets.receptorSprite.height
+            );
+
+            if (texture) {
+                sprite.texture = texture;
+                sprite.x = col * colWidth + colWidth / 2;
+                sprite.y = receptorY + colWidth / 2;
+                sprite.rotation = (rotations[col] * Math.PI) / 180;
+                sprite.width = arrowSize;
+                sprite.height = arrowSize;
+
+                // LOD: Simplify distant receptors (rare but possible with zoom mods)
+                const lodLevel = this._getLODLevel(receptorY);
+                if (lodLevel >= 1) {
+                    sprite.rotation = 0; // No rotation for simplified rendering
+                }
+
+                this.layers.receptors.addChild(sprite);
+                receptorSprites++;
+            } else {
+                this._returnSpriteToPool(sprite, 'receptor');
+            }
+        }
+
+        return receptorSprites;
+    }
+
+    /**
+     * Render all visible notes
+     */
+    _renderNotes(visibleNotes, rotations, currentTime, receptorCount = 0) {
+        const colWidth = gameConfig.columnWidth;
+        const arrowSize = gameConfig.arrowSize;
+        const receptorY = gameConfig.receptorY;
+        const scrollSpeed = gameConfig.scrollSpeed;
+        const downScroll = userConfig.downScroll;
+
+        // Performance: Track sprites drawn this frame (includes hold bodies + note heads)
+        let spritesDrawn = receptorCount;
+
+        // Pre-calculate appearance modifiers
+        let appearanceType = null, appearanceOffset = 0, syncFadeActive = false;
+        if (modConfig.appearance) {
+            appearanceType = modConfig.appearance.type;
+            appearanceOffset = (modConfig.appearance.offset || 50) / 100;
+        }
+        if (window.isSyncMode && gameState.startTime && currentTime > 4.0) {
+            syncFadeActive = true;
+        }
+
+        const miniEffect = modConfig.effect && modConfig.effect.name === 'mini';
+        const drunkEffect = modConfig.effect && modConfig.effect.name === 'drunk';
+        const dizzyEffect = modConfig.effect && modConfig.effect.name === 'dizzy';
+        const flipEffect = modConfig.effect && modConfig.effect.name === 'flip';
+        const invertEffect = modConfig.effect && modConfig.effect.name === 'invert';
+
+        // First pass: Render hold/roll bodies
+        for (const note of visibleNotes) {
+            if (note.type !== 'hold' && note.type !== 'roll') continue;
+            if (!note.endTime) continue;
+
+            // Calculate Y position
+            const timeDiff = note.time - currentTime;
+            const scrollDist = timeDiff * scrollSpeed;
+            const y = downScroll ? receptorY - scrollDist : receptorY + scrollDist;
+
+            // Calculate alpha
+            let alpha = 1.0;
+            if (syncFadeActive) {
+                alpha = 1.0 - Math.min((currentTime - 4.0) / 4.0, 1.0);
+            } else if (appearanceType) {
+                const dist = Math.abs(y - receptorY);
+                const screenH = this.app.screen.height;
+                if (appearanceType === 'stealth') alpha = 0;
+                else if (appearanceType === 'hidden') {
+                    const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                    if (dist < fadePoint) alpha = dist / fadePoint;
+                } else if (appearanceType === 'sudden') {
+                    const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                    if (dist > fadePoint) alpha = 0;
+                    else alpha = 1 - (dist / fadePoint);
+                }
+            }
+            if (alpha <= 0.01) continue;
+
+            // Calculate body geometry
+            const duration = note.endTime - note.time;
+            const distTotal = duration * scrollSpeed;
+            let bodyStartY = y;
+            let bodyEndY = downScroll ? y - distTotal : y + distTotal;
+
+            if (note.holdState === 'active') {
+                bodyStartY = receptorY + colWidth / 2;
+            }
+
+            // Viewport culling: Skip off-screen hold bodies
+            const bodyTop = Math.min(bodyStartY, bodyEndY);
+            const bodyBottom = Math.max(bodyStartY, bodyEndY);
+            if (!this._isInViewport(bodyTop, bodyBottom - bodyTop)) continue;
+
+            // Get sprite
+            const poolType = note.type === 'hold' ? 'holdBody' : 'rollBody';
+            const sprite = this._getSpriteFromPool(poolType);
+            if (!sprite) continue;
+
+            // Calculate alpha with hold state
+            let finalAlpha = 0.8 * alpha;
+            if (note.letGoTime) {
+                finalAlpha *= Math.max(0, 1 - ((currentTime - note.letGoTime) * 1000 / 250));
+            }
+            if (note.rollAlpha !== undefined) finalAlpha *= note.rollAlpha;
+            if (note.holdState === 'missed') finalAlpha *= 0.5;
+
+            // Set texture
+            const texture = this._getTexture(note.type === 'hold' ? 'holdBody' : 'rollBody');
+            if (texture) {
+                sprite.texture = texture;
+                sprite.tileScale.set(arrowSize / texture.width, arrowSize / texture.width);
+
+                // Position and size
+                sprite.x = note.col * colWidth + colWidth / 2;
+                sprite.y = Math.min(bodyStartY, bodyEndY);
+                sprite.width = arrowSize;
+                sprite.height = Math.abs(bodyEndY - bodyStartY);
+                sprite.alpha = finalAlpha;
+                sprite.tint = 0xFFFFFF;
+
+                this.layers.holdBodies.addChild(sprite);
+                this.activeSprites.set(note, sprite);
+                spritesDrawn++;
+            } else {
+                this._returnSpriteToPool(sprite, poolType);
+            }
+        }
+
+        // Second pass: Render note heads
+        for (const note of visibleNotes) {
+            if (note.processed && note.holdState !== 'active') continue;
+            if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) continue;
+
+            // Calculate Y position
+            const timeDiff = note.time - currentTime;
+            const scrollDist = timeDiff * scrollSpeed;
+            let y = downScroll ? receptorY - scrollDist : receptorY + scrollDist;
+
+            // For active holds, head stays at receptor
+            let headY = y;
+            if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+                headY = receptorY;
+            }
+
+            // Viewport culling: Skip off-screen note heads
+            if (!this._isInViewport(headY, arrowSize)) continue;
+
+            // Calculate X with effects
+            let drawX = note.col * colWidth;
+            if (flipEffect) {
+                drawX = (3 - note.col) * colWidth;
+            } else if (invertEffect) {
+                const map = [1, 0, 3, 2];
+                drawX = map[note.col] * colWidth;
+            }
+            if (drunkEffect) {
+                drawX += Math.cos(currentTime * 3 + headY * 0.01) * (colWidth / 2);
+            }
+
+            // Calculate alpha
+            let alpha = 1.0;
+            if (syncFadeActive) {
+                alpha = 1.0 - Math.min((currentTime - 4.0) / 4.0, 1.0);
+            } else if (appearanceType) {
+                const dist = Math.abs(headY - receptorY);
+                const screenH = this.app.screen.height;
+                if (appearanceType === 'stealth') alpha = 0;
+                else if (appearanceType === 'hidden') {
+                    const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                    if (dist < fadePoint) alpha = dist / fadePoint;
+                } else if (appearanceType === 'sudden') {
+                    const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                    if (dist > fadePoint) alpha = 0;
+                    else alpha = 1 - (dist / fadePoint);
+                }
+            }
+            if (note.type === 'fake') alpha *= 0.2;
+            if (alpha <= 0.01) continue;
+
+            // Calculate rotation
+            let rotation = rotations[note.col];
+            if (dizzyEffect) {
+                rotation += (currentTime * 100) % 360;
+            }
+
+            // Get sprite and texture
+            let sprite, texture;
+            if (note.type === 'mine') {
+                sprite = this._getSpriteFromPool('mine');
+                if (!sprite) continue;
+
+                const frames = 8;
+                const frame = Math.floor(this.frameCount / 10) % frames;
+                const fw = assets.mineSprite.width / 8;
+                texture = this._getTexture('mineSprite', frame * fw, 0, fw, assets.mineSprite.height);
+            } else {
+                // Tap note or hold head
+                const poolType = (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active'
+                    ? 'holdHead' : 'tap';
+                sprite = this._getSpriteFromPool(poolType);
+                if (!sprite) continue;
+
+                const rowIndex = getNoteRowIndex(note.beat);
+                const img = (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active'
+                    ? assets.holdHeadActive : assets.arrowSprite;
+                const imgH = img.height / 8;
+                texture = this._getTexture(
+                    (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active'
+                        ? 'holdHeadActive' : 'arrowSprite',
+                    0,
+                    rowIndex * imgH,
+                    img.width,
+                    imgH
+                );
+            }
+
+            if (texture && sprite) {
+                sprite.texture = texture;
+                sprite.x = drawX + colWidth / 2;
+                sprite.y = headY + colWidth / 2;
+                sprite.rotation = (rotation * Math.PI) / 180;
+                sprite.alpha = alpha;
+
+                // LOD: Reduce visual complexity for distant notes
+                const lodLevel = this._getLODLevel(headY);
+                if (lodLevel === 2) {
+                    // Minimal detail: Skip rotation for far notes
+                    sprite.rotation = 0;
+                    sprite.alpha *= 0.8; // Slight fade for very distant notes
+                }
+
+                if (miniEffect) {
+                    sprite.scale.set(0.5);
+                } else if (lodLevel === 1) {
+                    // Reduced detail: smaller sprites
+                    sprite.scale.set(0.9);
+                } else {
+                    sprite.scale.set(1);
+                }
+
+                sprite.width = arrowSize;
+                sprite.height = arrowSize;
+
+                this.layers.noteHeads.addChild(sprite);
+                this.activeSprites.set(note, sprite);
+                spritesDrawn++;
+            } else if (sprite) {
+                this._returnSpriteToPool(sprite, note.type === 'mine' ? 'mine' :
+                    ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active' ? 'holdHead' : 'tap'));
+            }
+        }
+
+        // Update render statistics
+        this._updateRenderStats(spritesDrawn);
+    }
+
+    /**
+     * Resize the renderer when window changes
+     */
+    resize() {
+        if (!this.app) return;
+
+        const height = window.innerHeight;
+        const width = height * 0.625;
+
+        this.app.renderer.resize(width, height);
+    }
+
+    /**
+     * Destroy and cleanup
+     */
+    destroy() {
+        if (this.app) {
+            this.app.destroy(true);
+            this.app = null;
+        }
+        this.textures = {};
+        this.baseTextures = {};
+        this.useWebGL = false;
+    }
+}
+
+// Global renderer instance
+const gameplayRenderer = new GameplayRenderer();
 
 // Placeholder Data
 const placeholders = [{ meta: { title: "Loading Sync...", artist: "..." }, charts: [] }];
@@ -3054,10 +3801,16 @@ function quitGame() {
 
     document.getElementById('pause-menu').style.display = 'none';
 
+    // Hide both Canvas 2D and WebGL renderers
     const cvs = document.getElementById('gameCanvas');
     if (cvs) {
         cvs.style.display = 'none';
         if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    const pixiContainer = document.getElementById('pixi-container');
+    if (pixiContainer) {
+        pixiContainer.style.display = 'none';
     }
 
     const apInd = document.getElementById('autoplay-indicator');
@@ -3124,6 +3877,16 @@ function setupCanvas() {
     // Use new Logic
     // Use new Logic
     updateScrollSpeed((typeof modConfig !== 'undefined' ? modConfig.rate : 1.0));
+
+    // Initialize WebGL renderer (falls back to Canvas 2D if unavailable)
+    if (!gameplayRenderer.app) {
+        const webglInitialized = gameplayRenderer.init(canvas);
+        if (webglInitialized) {
+            console.log('[setupCanvas] WebGL renderer initialized successfully');
+        } else {
+            console.log('[setupCanvas] Using Canvas 2D fallback');
+        }
+    }
 }
 function getNoteRowIndex(beat) { const b = Math.abs(beat); const epsilon = 0.01; const isSnap = (div) => Math.abs((b * div) - Math.round(b * div)) < epsilon; if (isSnap(1)) return 0; if (isSnap(2)) return 1; if (isSnap(3)) return 2; if (isSnap(4)) return 3; if (isSnap(6)) return 4; if (isSnap(8)) return 5; if (isSnap(12)) return 6; return 7; }
 function stepReplay(dir) {
@@ -3234,6 +3997,222 @@ function drawHoldExplosion(x, y, rotation, colIndex, currentTime) {
         ctx.drawImage(expImg, frame * fw, 0, fw, expImg.height, offset, offset, drawSize, drawSize);
         ctx.restore();
     }
+}
+
+/**
+ * Optimized batch rendering for gameplay notes.
+ * Separates rendering into phases to minimize ctx.save/restore calls.
+ * Phase 1: Hold/Roll bodies (batched by type)
+ * Phase 2: Note heads (mines, taps, hold heads)
+ * Reduces state changes from 4-6 per note to ~2 total.
+ */
+function renderNotesBatched(visibleNotes, rotations, currentTime) {
+    const halfCol = gameConfig.columnWidth / 2;
+    const drawSize = gameConfig.arrowSize;
+    const offset = -drawSize / 2;
+
+    // Pre-calculate appearance modifiers once per frame
+    let appearanceType = null, appearanceOffset = 0, syncFadeActive = false;
+    if (modConfig.appearance) {
+        appearanceType = modConfig.appearance.type;
+        appearanceOffset = (modConfig.appearance.offset || 50) / 100;
+    }
+    if (window.isSyncMode && gameState.startTime && currentTime > 4.0) {
+        syncFadeActive = true;
+    }
+
+    // --- PHASE 1: Render Hold/Roll Bodies ---
+    // Batch by type to minimize pattern switching
+    ctx.save();
+    for (let i = 0; i < visibleNotes.length; i++) {
+        const note = visibleNotes[i];
+        if (note.type !== 'hold' && note.type !== 'roll') continue;
+        if (!note.endTime) continue;
+
+        // Calculate Y position
+        const timeDiff = note.time - currentTime;
+        const scrollDist = timeDiff * gameConfig.scrollSpeed;
+        let y = userConfig.downScroll
+            ? gameConfig.receptorY - scrollDist
+            : gameConfig.receptorY + scrollDist;
+
+        // Calculate alpha
+        let alpha = 1.0;
+        if (syncFadeActive) {
+            alpha = 1.0 - Math.min((currentTime - 4.0) / 4.0, 1.0);
+        } else if (appearanceType) {
+            const dist = Math.abs(y - gameConfig.receptorY);
+            const screenH = canvas.height;
+            if (appearanceType === 'stealth') alpha = 0;
+            else if (appearanceType === 'hidden') {
+                const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                if (dist < fadePoint) alpha = dist / fadePoint;
+            } else if (appearanceType === 'sudden') {
+                const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                if (dist > fadePoint) alpha = 0;
+                else alpha = 1 - (dist / fadePoint);
+            }
+        }
+
+        if (alpha <= 0.01) continue;
+
+        // Calculate body geometry
+        const duration = note.endTime - note.time;
+        const distTotal = duration * gameConfig.scrollSpeed;
+        let bodyStartY = y;
+        let bodyEndY = userConfig.downScroll ? y - distTotal : y + distTotal;
+
+        if (note.holdState === 'active') {
+            bodyStartY = gameConfig.receptorY + halfCol;
+        }
+
+        // Visibility check
+        const bodyTop = Math.min(bodyStartY, bodyEndY);
+        const bodyBottom = Math.max(bodyStartY, bodyEndY);
+        if (bodyBottom < -100 || bodyTop > canvas.height + 100) continue;
+
+        // Render body
+        const isHold = note.type === 'hold';
+        const bodyImg = isHold ? assets.holdBody : assets.rollBody;
+        const bodyLoaded = isHold ? assets.loaded.holdBody : assets.loaded.rollBody;
+
+        if (bodyLoaded && bodyImg) {
+            ctx.globalAlpha = 0.8 * alpha;
+            if (note.letGoTime) {
+                ctx.globalAlpha *= Math.max(0, 1 - ((currentTime - note.letGoTime) * 1000 / 250));
+            }
+            if (note.rollAlpha !== undefined) ctx.globalAlpha *= note.rollAlpha;
+            if (note.holdState === 'missed') ctx.globalAlpha *= 0.5;
+
+            const w = drawSize;
+            const bx = (note.col * gameConfig.columnWidth) + (gameConfig.columnWidth - w) / 2;
+            const imgScale = w / bodyImg.width;
+
+            // Use global pattern cache
+            const pattern = assets.getPattern(note.type, imgScale, ctx);
+            if (pattern) {
+                ctx.fillStyle = pattern;
+
+                // Calculate fill region in pattern space
+                const patternY = y;
+                const fillStart = (bodyStartY - patternY) / imgScale;
+                const fillEnd = (bodyEndY - patternY) / imgScale;
+                const fillHeight = fillEnd - fillStart;
+
+                ctx.save();
+                ctx.translate(bx, patternY);
+                ctx.scale(imgScale, imgScale);
+                ctx.fillRect(0, fillStart, bodyImg.width, fillHeight);
+                ctx.restore();
+            }
+        }
+    }
+    ctx.restore();
+
+    // --- PHASE 2: Render Note Heads ---
+    ctx.save();
+    const miniEffect = modConfig.effect && modConfig.effect.name === 'mini';
+    const drunkEffect = modConfig.effect && modConfig.effect.name === 'drunk';
+    const dizzyEffect = modConfig.effect && modConfig.effect.name === 'dizzy';
+    const flipEffect = modConfig.effect && modConfig.effect.name === 'flip';
+    const invertEffect = modConfig.effect && modConfig.effect.name === 'invert';
+
+    for (let i = 0; i < visibleNotes.length; i++) {
+        const note = visibleNotes[i];
+
+        // Skip hold bodies (already rendered) and processed notes
+        if (note.processed && note.holdState !== 'active') continue;
+        if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) continue;
+
+        // Calculate Y position
+        const timeDiff = note.time - currentTime;
+        const scrollDist = timeDiff * gameConfig.scrollSpeed;
+        let y = userConfig.downScroll
+            ? gameConfig.receptorY - scrollDist
+            : gameConfig.receptorY + scrollDist;
+
+        // For active holds, head stays at receptor
+        let headY = y;
+        if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+            headY = gameConfig.receptorY;
+        }
+
+        // Visibility check
+        if (headY < -100 || headY > canvas.height + 100) continue;
+
+        // Calculate X with effects
+        let drawX = note.col * gameConfig.columnWidth;
+        if (flipEffect) {
+            drawX = (3 - note.col) * gameConfig.columnWidth;
+        } else if (invertEffect) {
+            const map = [1, 0, 3, 2];
+            drawX = map[note.col] * gameConfig.columnWidth;
+        }
+        if (drunkEffect) {
+            drawX += Math.cos(currentTime * 3 + headY * 0.01) * halfCol;
+        }
+
+        // Calculate alpha
+        let alpha = 1.0;
+        if (syncFadeActive) {
+            alpha = 1.0 - Math.min((currentTime - 4.0) / 4.0, 1.0);
+        } else if (appearanceType) {
+            const dist = Math.abs(headY - gameConfig.receptorY);
+            const screenH = canvas.height;
+            if (appearanceType === 'stealth') alpha = 0;
+            else if (appearanceType === 'hidden') {
+                const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                if (dist < fadePoint) alpha = dist / fadePoint;
+            } else if (appearanceType === 'sudden') {
+                const fadePoint = appearanceOffset * (screenH * 0.5) + 50;
+                if (dist > fadePoint) alpha = 0;
+                else alpha = 1 - (dist / fadePoint);
+            }
+        }
+        if (note.type === 'fake') alpha *= 0.2;
+        if (alpha <= 0.01) continue;
+
+        // Calculate rotation
+        let rotation = rotations[note.col];
+        if (dizzyEffect) {
+            rotation += (currentTime * 100) % 360;
+        }
+
+        // Render the head
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(drawX + halfCol, headY + halfCol);
+        ctx.rotate(rotation * Math.PI / 180);
+
+        if (miniEffect) {
+            ctx.scale(0.5, 0.5);
+        }
+
+        // Draw based on note type
+        if (note.type === 'mine' && assets.loaded.mineSprite) {
+            const frames = 8;
+            const frame = Math.floor(gameState.globalFrame / 10) % frames;
+            const fw = assets.mineSprite.width / 8;
+            const fh = assets.mineSprite.height;
+            ctx.drawImage(assets.mineSprite, frame * fw, 0, fw, fh, offset, offset, drawSize, drawSize);
+        } else {
+            let img = assets.arrowSprite;
+            if (note.holdState === 'active' && assets.loaded.holdHeadActive) {
+                img = assets.holdHeadActive;
+            }
+
+            const rowIndex = getNoteRowIndex(note.beat);
+            if ((assets.loaded.arrowSprite || assets.loaded.holdHeadActive) && img) {
+                const sy = rowIndex * (img.height / 8);
+                ctx.drawImage(img, 0, sy, img.width, img.height / 8, offset, offset, drawSize, drawSize);
+            } else {
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(offset, offset, drawSize, drawSize);
+            }
+        }
+        ctx.restore();
+    }
+    ctx.restore();
 }
 
 // Refactored drawNote with Alpha Fade & Alignment & Modifiers
@@ -3418,12 +4397,15 @@ function drawNote(note, y, rotation, currentTime) {
             ctx.save();
             ctx.translate(bx, y);
 
-            if (!note.bodyPattern) {
-                note.bodyPattern = ctx.createPattern(bodyImg, 'repeat');
-            }
-            ctx.fillStyle = note.bodyPattern;
-
+            // Use global pattern cache instead of per-note pattern creation
             const imgScale = w / bodyImg.width;
+            const pattern = assets.getPattern(note.type, imgScale, ctx);
+            if (pattern) {
+                ctx.fillStyle = pattern;
+            } else {
+                ctx.fillStyle = '#888'; // Fallback
+            }
+
             ctx.scale(imgScale, imgScale);
 
             // Coordinates in image space
@@ -3791,29 +4773,85 @@ function gameLoop() {
         // Pre-calculate active holds for this frame to optimize drawReceptor
         gameState.colsActive = [false, false, false, false];
 
-        // Determine visible Window
+        // Determine visible Window using Spatial Index for O(1) lookup
         // Reuse static array to reduce GC
         if (!gameState.visibleNotesCache) gameState.visibleNotesCache = [];
         const visibleNotes = gameState.visibleNotesCache;
         visibleNotes.length = 0;
 
-        const maxVisibleTime = currentTime + (canvas.height / gameConfig.scrollSpeed) + 2.0; // Buffer
+        const scrollSpeed = gameConfig.scrollSpeed;
+        const maxVisibleTime = currentTime + (canvas.height / scrollSpeed) + 2.0; // Buffer
+        const minVisibleTime = currentTime - 1.0; // 1 second buffer for active holds
 
-        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
-            const note = gameState.activeNotes[i];
+        // Build spatial index on first frame (bucket size: 2 seconds)
+        if (!gameState.noteSpatialIndex && gameState.activeNotes.length > 0) {
+            const bucketSize = 2.0; // 2 seconds per bucket
+            const index = new Map();
+            const lastNote = gameState.activeNotes[gameState.activeNotes.length - 1];
+            const totalBuckets = Math.ceil(lastNote.time / bucketSize) + 1;
 
-            // Check for Active Hold
-            if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-                gameState.colsActive[note.col] = true;
+            for (let i = 0; i < totalBuckets; i++) {
+                index.set(i, []);
             }
 
-            // Keep active holds even if time < currentTime
-            if (note.time > maxVisibleTime) {
-                // Optimization: Stop iterating if future notes are off screen
-                break;
+            for (let i = 0; i < gameState.activeNotes.length; i++) {
+                const note = gameState.activeNotes[i];
+                const bucket = Math.floor(note.time / bucketSize);
+                const bucketArray = index.get(bucket);
+                if (bucketArray) {
+                    bucketArray.push(note);
+                }
             }
 
-            visibleNotes.push(note);
+            gameState.noteSpatialIndex = {
+                buckets: index,
+                bucketSize: bucketSize,
+                totalBuckets: totalBuckets
+            };
+        }
+
+        // Use spatial index if available, otherwise fall back to linear scan
+        if (gameState.noteSpatialIndex) {
+            const { buckets, bucketSize } = gameState.noteSpatialIndex;
+            const startBucket = Math.floor(Math.max(0, minVisibleTime) / bucketSize);
+            const endBucket = Math.floor(maxVisibleTime / bucketSize);
+
+            for (let b = startBucket; b <= endBucket && b < gameState.noteSpatialIndex.totalBuckets; b++) {
+                const bucketNotes = buckets.get(b);
+                if (!bucketNotes) continue;
+
+                for (let i = 0; i < bucketNotes.length; i++) {
+                    const note = bucketNotes[i];
+
+                    // Check for Active Hold (always render active holds regardless of time)
+                    if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+                        gameState.colsActive[note.col] = true;
+                        // Active holds are always visible if not expired
+                        if (currentTime <= note.endTime + 0.5) {
+                            visibleNotes.push(note);
+                        }
+                        continue;
+                    }
+
+                    // Skip if outside visible time window
+                    if (note.time > maxVisibleTime) continue;
+                    if (note.time < minVisibleTime && note.holdState !== 'active') continue;
+
+                    visibleNotes.push(note);
+                }
+            }
+        } else {
+            // Fallback: Linear scan (for compatibility)
+            for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+                const note = gameState.activeNotes[i];
+
+                if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+                    gameState.colsActive[note.col] = true;
+                }
+
+                if (note.time > maxVisibleTime) break;
+                visibleNotes.push(note);
+            }
         }
 
 
@@ -3823,23 +4861,18 @@ function gameLoop() {
         if (!gameState.vectorRotations) gameState.vectorRotations = [270, 180, 0, 90];
         const rotations = assets.loaded.arrowSprite ? gameState.spriteRotations : gameState.vectorRotations;
 
-        ctx.save();
-        for (let i = 0; i < 4; i++) {
-            drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i);
-        }
-        ctx.restore();
-
-        // Process & Draw Visible Notes
+        // --- PROCESS GAME LOGIC FOR VISIBLE NOTES ---
+        // (Rendering happens after all logic is processed)
+        // Separate logic updates from rendering for performance
         for (let j = 0; j < visibleNotes.length; j++) {
             const note = visibleNotes[j];
+
             // --- HOLD LOGIC ---
             if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-
                 // 1. Check if finalized (reached end)
                 if (currentTime >= note.endTime) {
                     note.holdState = 'ok';
                     triggerHoldJudgement(note, true, currentTime);
-
                     if (gameState.heldKeys[note.col]) {
                         if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
                         gameState.needsRelease[note.col] = true;
@@ -3849,7 +4882,6 @@ function gameLoop() {
 
                 // 2. Check input status
                 const keyHeld = gameState.heldKeys[note.col];
-
                 if (note.type === 'hold') {
                     if (!keyHeld) {
                         if (!note.letGoTime) note.letGoTime = currentTime;
@@ -3928,25 +4960,32 @@ function gameLoop() {
                 triggerJudgement(note, J_MISS_WINDOW + 1, true, currentTime);
                 continue;
             }
+        }
 
-            let y;
-            const scrollDist = timeDiff * gameConfig.scrollSpeed;
-            if (userConfig.downScroll) y = gameConfig.receptorY - scrollDist;
-            else y = gameConfig.receptorY + scrollDist;
+        // --- RENDERING: WEBGL OR CANVAS 2D ---
+        // Try WebGL first, fall back to Canvas 2D if unavailable
+        let webglRendered = false;
+        if (gameplayRenderer.useWebGL && gameplayRenderer.app) {
+            gameplayRenderer.enable();
+            webglRendered = gameplayRenderer.render(visibleNotes, rotations, currentTime);
+        }
 
-            // Visibility Check
-            let noteTop = y;
-            let noteBottom = y;
+        // Canvas 2D fallback: Only used when WebGL is not available
+        if (!webglRendered) {
+            gameplayRenderer.disable();
 
-            if ((note.type === 'hold' || note.type === 'roll') && note.endTime) {
-                const duration = note.endTime - note.time;
-                const distTotal = duration * gameConfig.scrollSpeed;
-                if (userConfig.downScroll) noteTop = y - distTotal; else noteBottom = y + distTotal;
+            // Clear canvas for fresh render
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Render receptors
+            ctx.save();
+            for (let i = 0; i < 4; i++) {
+                drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i);
             }
+            ctx.restore();
 
-            if (noteBottom > -100 && noteTop < canvas.height + 100) {
-                drawNote(note, y, rotations[note.col], currentTime);
-            }
+            // Batch render notes
+            renderNotesBatched(visibleNotes, rotations, currentTime);
         }
 
         // --- RENDER HOLD EXPLOSIONS ON TOP ---
@@ -4616,7 +5655,15 @@ function handleInput(e) {
 
     processInput(colIndex, type, currentTime, rate);
 
-} window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => { if (gameState.isPlaying) setupCanvas(); });
+} window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => {
+    if (gameState.isPlaying) {
+        setupCanvas();
+        // Also resize WebGL renderer if active
+        if (gameplayRenderer.useWebGL) {
+            gameplayRenderer.resize();
+        }
+    }
+});
 
 function processInput(colIndex, type, currentTime, rate) {
     if (type === 'down') {
@@ -4814,7 +5861,7 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     updateScrollSpeed((typeof modConfig !== 'undefined' ? modConfig.rate : 1.0));
 
     setScreen('game-hud');
-    document.getElementById('gameCanvas').style.display = 'block';
+    // Canvas visibility is handled by gameLoop (WebGL or Canvas 2D)
     setText('judgment', "");
     const comboEl = document.getElementById('combo');
     if (comboEl) {
@@ -4933,6 +5980,9 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
     gameState.activeNotes = gameState.notes; // For now all notes are "active" candidates
     gameState.totalNotesInChart = notes.filter(n => n.type !== 'mine' && n.type !== 'fake').length;
 
+    // Clear pattern cache from previous game to prevent memory leaks
+    assets.clearPatterns();
+
     const firstNote = notes.find(n => n.type !== 'mine');
     gameState.firstNoteTime = firstNote ? firstNote.time : 0;
     gameState.hasPausedDuringPlay = false;
@@ -4950,7 +6000,15 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
 
 function startEngine() {
     setupCanvas();
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // --- AUDIO OPTIMIZATION: Low latency context for competitive play ---
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext({
+            latencyHint: 'interactive', // Prioritize low latency over power saving
+            sampleRate: 48000 // Match common hardware to avoid resampling
+        });
+    }
 
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
     const useVinyl = (typeof modConfig !== 'undefined' && modConfig.pitchShift !== undefined) ? modConfig.pitchShift : true;
@@ -4971,7 +6029,6 @@ function startEngine() {
                 // Determine finish
             }
         };
-        audioSource.connect(audioCtx.destination);
         audioSource.connect(audioCtx.destination);
         const startTime = audioCtx.currentTime + 3.0; // 3.0s delay
         audioSource.start(startTime);

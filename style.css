@@ -1202,7 +1202,7 @@ input[type=range]::-webkit-slider-runnable-track {
 /* .ss-start-btn was previously defined with width: 100%. Check context. */
 
 /* --- GAMEPLAY & HUD --- */
-#gameCanvas {
+#gameCanvas, #pixi-container {
     position: absolute;
     left: 50%;
     top: 0;
@@ -1211,6 +1211,10 @@ input[type=range]::-webkit-slider-runnable-track {
     box-shadow: 0 0 80px rgba(0, 0, 0, 0.8);
     border-left: 1px solid rgba(255, 255, 255, 0.1);
     border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#pixi-container canvas {
+    display: block;
 }
 
 #game-hud {
