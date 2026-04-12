@@ -4,10 +4,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebSM Rhythm Game</title>
+    <title>Donguri🟊Web Etterna clone</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.2/pixi.min.js"></script>
+
+    <script src="engine/audio-engine.js"></script>
+    <script src="engine/input-engine.js"></script>
+    <script src="engine/renderer.js"></script>
+    <script src="engine/game-loop.js"></script>
+    <script src="gamepad.js"></script>
+    <script src="difficulty/CalcConstants.js"></script>
+    <script src="difficulty/CalcWindow.js"></script>
+    <script src="difficulty/AnchorSequencing.js"></script>
+    <script src="difficulty/FlamSequencing.js"></script>
+    <script src="difficulty/ThingSequencing.js"></script>
+    <script src="difficulty/TrillSequencing.js"></script>
+    <script src="difficulty/PatternMods.js"></script>
+    <script src="difficulty/PatternModsFull.js"></script>
+    <script src="difficulty/Ulbu.js"></script>
+    <script src="difficulty/MSD.js"></script>
+    <script src="difficulty/SSR.js"></script>
     <script src="difficulty.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -22,7 +39,7 @@
         <!-- Intro / Loading Screen -->
         <div id="intro-screen">
             <div id="intro-content">
-                <h1 id="intro-title">WebSM</h1>
+                <h1 id="intro-title">Donguri🟊</h1>
                 <div id="intro-loading-text" class="glow-text">Now Loading... <br> If the game is stuck here, contact
                     the developer.</div>
                 <div id="intro-prompt" class="blink-text" style="display:none;">PRESS ANY KEY TO START</div>

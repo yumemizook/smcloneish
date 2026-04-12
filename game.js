@@ -1,4 +1,4 @@
-﻿/* =========================================
+/* =========================================
    CONSTANTS & CONFIG
    ========================================= */
 let userConfig = {
@@ -38,7 +38,6 @@ function loadUserConfig() {
             // Ensure defaults if missing from saved (migration)
             if (!userConfig.keyPause) userConfig.keyPause = 'Escape';
             if (!userConfig.keyRetry) userConfig.keyRetry = 'Backquote';
-            if (!userConfig.keyRateUp) userConfig.keyRateUp = '=';
             if (!userConfig.keyRateUp) userConfig.keyRateUp = '=';
             if (!userConfig.keyRateDown) userConfig.keyRateDown = '-';
             if (userConfig.globalOffset === undefined) userConfig.globalOffset = 0;
@@ -664,6 +663,17 @@ function setText(id, text) {
 let canvas, ctx;
 let audioCtx, audioBuffer, audioSource;
 
+// --- LOW-LATENCY INPUT SYSTEM ---
+const INPUT_BUFFER_SIZE = 16; // Circular buffer for last N inputs
+let inputBuffer = new Array(INPUT_BUFFER_SIZE).fill(null); // {time, col, type, timestamp}
+let inputBufferIndex = 0;
+let useCapturePhase = true; // Use capture phase for earlier event access
+let pointerLockActive = false; // Track pointer lock state for keyboard capture
+
+// --- AUDIO WORKER (off-thread decoding) ---
+let audioWorker = null; // Web Worker for off-thread audio decoding
+let useAudioWorker = false; // DISABLED: Web Workers may not have Web Audio API
+
 let songLibrary = [];
 let selectedSongIndex = -1;
 let selectedChartIndex = -1;
@@ -719,19 +729,25 @@ let assets = {
     loaded: { arrowSprite: false, holdHeadActive: false, holdBody: false, rollBody: false, holdExplosion: false, mineSprite: false, receptorSprite: false },
     // Global pattern cache - keyed by "type_scale" (e.g., "hold_1.0")
     patterns: new Map(),
-    getPattern: function(type, scale, ctx) {
+    MAX_PATTERN_CACHE_SIZE: 16, // FIX: Limit cache size to prevent memory bloat
+    getPattern: function (type, scale, ctx) {
         const key = `${type}_${scale.toFixed(3)}`;
         let pattern = this.patterns.get(key);
         if (!pattern) {
             const img = type === 'hold' ? this.holdBody : this.rollBody;
             if (this.loaded[type === 'hold' ? 'holdBody' : 'rollBody']) {
                 pattern = ctx.createPattern(img, 'repeat');
+                // FIX: LRU eviction - remove oldest entry if cache is full
+                if (this.patterns.size >= this.MAX_PATTERN_CACHE_SIZE) {
+                    const firstKey = this.patterns.keys().next().value;
+                    this.patterns.delete(firstKey);
+                }
                 this.patterns.set(key, pattern);
             }
         }
         return pattern;
     },
-    clearPatterns: function() {
+    clearPatterns: function () {
         this.patterns.clear();
     }
 };
@@ -742,13 +758,15 @@ const loadAsset = (key, src) => {
     assets[key].onerror = () => { console.warn(`Asset ${key} not found: ${src}`); };
 };
 
-loadAsset('arrowSprite', "_Down Tap Note 1x8.png");
-loadAsset('holdHeadActive', "_Down Hold Active 1x8.png");
-loadAsset('holdBody', "Down Hold Body Active.png");
-loadAsset('rollBody', "Down Roll Body active.png");
-loadAsset('holdExplosion', "Down Hold Explosion 2x1.png");
-loadAsset('mineSprite', "_Down Tap Mine 8x1.png");
-loadAsset('receptorSprite', "_Down Go Receptor Go 2x1.png");
+const NOTESKIN_PATH = "noteskin/";
+
+loadAsset('arrowSprite', NOTESKIN_PATH + "_Down Tap Note 1x8.png");
+loadAsset('holdHeadActive', NOTESKIN_PATH + "_Down Hold Active 1x8.png");
+loadAsset('holdBody', NOTESKIN_PATH + "Down Hold Body Active.png");
+loadAsset('rollBody', NOTESKIN_PATH + "Down Roll Body active.png");
+loadAsset('holdExplosion', NOTESKIN_PATH + "Down Hold Explosion 2x1.png");
+loadAsset('mineSprite', NOTESKIN_PATH + "_Down Tap Mine 8x1.png");
+loadAsset('receptorSprite', NOTESKIN_PATH + "_Down Go Receptor Go 2x1.png");
 
 /* =========================================
    WEBGL RENDERER (PixiJS)
@@ -794,6 +812,16 @@ class GameplayRenderer {
 
         // Frame counter for animations
         this.frameCount = 0;
+
+        // Pool indices for fast reuse (O(1) instead of O(N) search)
+        this.poolIndices = {
+            tap: 0,
+            mine: 0,
+            holdHead: 0,
+            holdBody: 0,
+            rollBody: 0,
+            receptor: 0
+        };
 
         // --- Phase 3: Advanced Optimizations ---
         // ParticleContainer for instanced-like rendering of simple notes
@@ -881,7 +909,7 @@ class GameplayRenderer {
             this.app.stage.addChild(this.layers.noteHeads);
             this.app.stage.addChild(this.layers.effects);
 
-            // Initialize sprite pools
+            // Initialize sprite pools (Now adds them to layers immediately)
             this._initSpritePools();
 
             // Initialize offscreen canvas for static effects
@@ -901,40 +929,44 @@ class GameplayRenderer {
      * Initialize sprite pools for object reuse
      */
     _initSpritePools() {
-        // Pre-create sprites for each type
+        // Pre-create sprites for each type and add to layers
         for (let i = 0; i < this.maxPoolSize; i++) {
             // Tap notes
             const tap = new PIXI.Sprite();
             tap.anchor.set(0.5);
             tap.visible = false;
             this.spritePools.tap.push(tap);
+            this.layers.noteHeads.addChild(tap);
 
             // Mines
             const mine = new PIXI.Sprite();
             mine.anchor.set(0.5);
             mine.visible = false;
             this.spritePools.mine.push(mine);
+            this.layers.noteHeads.addChild(mine);
 
             // Hold heads
             const holdHead = new PIXI.Sprite();
             holdHead.anchor.set(0.5);
             holdHead.visible = false;
             this.spritePools.holdHead.push(holdHead);
+            this.layers.noteHeads.addChild(holdHead);
         }
 
         // Hold/Roll bodies use TilingSprite for efficiency
-        // Create a 1x1 white texture for initial placeholder
         const placeholderTexture = PIXI.Texture.WHITE;
-        for (let i = 0; i < 100; i++) {
+        for (let i = 0; i < 150; i++) {
             const holdBody = new PIXI.TilingSprite(placeholderTexture);
             holdBody.anchor.set(0.5, 0);
             holdBody.visible = false;
             this.spritePools.holdBody.push(holdBody);
+            this.layers.holdBodies.addChild(holdBody);
 
             const rollBody = new PIXI.TilingSprite(placeholderTexture);
             rollBody.anchor.set(0.5, 0);
             rollBody.visible = false;
             this.spritePools.rollBody.push(rollBody);
+            this.layers.holdBodies.addChild(rollBody);
         }
 
         // Receptors (only 4 needed)
@@ -943,6 +975,7 @@ class GameplayRenderer {
             receptor.anchor.set(0.5);
             receptor.visible = false;
             this.spritePools.receptor.push(receptor);
+            this.layers.receptors.addChild(receptor);
         }
     }
 
@@ -978,7 +1011,7 @@ class GameplayRenderer {
         ctx.clearRect(0, 0, w, h);
 
         // Create radial gradient for glow
-        const gradient = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w/2);
+        const gradient = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
         gradient.addColorStop(0, 'rgba(0, 229, 255, 0.3)');
         gradient.addColorStop(0.5, 'rgba(0, 229, 255, 0.1)');
         gradient.addColorStop(1, 'rgba(0, 229, 255, 0)');
@@ -1028,9 +1061,7 @@ class GameplayRenderer {
             this.renderStats.lastFrameTime = now;
 
             // Log performance every 5 seconds (for debugging)
-            if (this.renderStats.frameCount % 5 === 0) {
-                console.log(`[GameplayRenderer] FPS: ${this.renderStats.fps}, Sprites: ${spritesDrawn}`);
-            }
+
         }
     }
 
@@ -1038,7 +1069,9 @@ class GameplayRenderer {
      * Create or get a texture from a loaded image asset
      */
     _getTexture(assetKey, frameX = 0, frameY = 0, frameW = null, frameH = null) {
-        const cacheKey = `${assetKey}_${frameX}_${frameY}_${frameW}_${frameH}`;
+        // FAST PATH: Use pre-allocated cache object if possible
+        // String interning in modern JS helps, but we can avoid some template work
+        const cacheKey = assetKey + frameX + "_" + frameY + "_" + frameW + "_" + frameH;
 
         if (this.textures[cacheKey]) {
             return this.textures[cacheKey];
@@ -1055,8 +1088,8 @@ class GameplayRenderer {
         }
 
         // Create frame rectangle
-        const frameWidth = frameW || img.width;
-        const frameHeight = frameH || img.height;
+        const frameWidth = (frameW === null) ? img.width : frameW;
+        const frameHeight = (frameH === null) ? img.height : frameH;
         const frame = new PIXI.Rectangle(frameX, frameY, frameWidth, frameHeight);
 
         // Create texture from frame
@@ -1071,14 +1104,15 @@ class GameplayRenderer {
      */
     _getSpriteFromPool(type) {
         const pool = this.spritePools[type];
-        for (let i = 0; i < pool.length; i++) {
-            if (!pool[i].visible) {
-                pool[i].visible = true;
-                pool[i].alpha = 1;
-                pool[i].scale.set(1);
-                pool[i].rotation = 0;
-                return pool[i];
-            }
+        const index = this.poolIndices[type]++;
+        if (index < pool.length) {
+            const sprite = pool[index];
+            // FIX: Reset properties efficiently
+            sprite.rotation = 0;
+            sprite.alpha = 1;
+            sprite.scale.set(1);
+            sprite.visible = true;
+            return sprite;
         }
         return null; // Pool exhausted
     }
@@ -1088,7 +1122,7 @@ class GameplayRenderer {
      */
     _returnSpriteToPool(sprite, type) {
         sprite.visible = false;
-        sprite.parent?.removeChild(sprite);
+        // No longer removing from parent to keep scene graph stable
     }
 
     /**
@@ -1131,14 +1165,17 @@ class GameplayRenderer {
 
         this.frameCount++;
 
-        // Clear previous frame's sprites
+        // Reset pool indices
         this._clearActiveSprites();
 
-        // Render receptors (get count for stats)
+        // Render receptors
         const receptorCount = this._renderReceptors(rotations);
 
-        // Render notes (tracks its own sprite count)
+        // Render notes
         this._renderNotes(visibleNotes, rotations, currentTime, receptorCount);
+
+        // Hide what we didn't use this frame
+        this._hideUnusedSprites();
 
         return true;
     }
@@ -1147,20 +1184,32 @@ class GameplayRenderer {
      * Clear all active sprites from previous frame
      */
     _clearActiveSprites() {
-        // Return all sprites to pools by resetting visibility
-        // This makes them available for _getSpriteFromPool again
-        const returnSprites = (container) => {
-            for (let i = container.children.length - 1; i >= 0; i--) {
-                const sprite = container.children[i];
-                sprite.visible = false;
-            }
-            container.removeChildren();
-        };
+        // Efficiently reset pool indices for the next frame
+        this.poolIndices.tap = 0;
+        this.poolIndices.mine = 0;
+        this.poolIndices.holdHead = 0;
+        this.poolIndices.holdBody = 0;
+        this.poolIndices.rollBody = 0;
+        this.poolIndices.receptor = 0;
 
-        returnSprites(this.layers.receptors);
-        returnSprites(this.layers.holdBodies);
-        returnSprites(this.layers.noteHeads);
-        this.activeSprites.clear();
+        // Note: We don't hide everything here anymore to avoid O(N) loop.
+        // Instead, individual render functions or a post-render pass will handle it.
+        // For now, let's just make sure all pooled sprites that WERENT used are hidden.
+    }
+
+    /**
+     * Hide all sprites that weren't used this frame
+     */
+    _hideUnusedSprites() {
+        const hide = (type) => {
+            const pool = this.spritePools[type];
+            const usedCount = this.poolIndices[type];
+            for (let i = usedCount; i < pool.length; i++) {
+                if (pool[i].visible) pool[i].visible = false;
+                else break; // Rest of pool is already hidden
+            }
+        };
+        hide('tap'); hide('mine'); hide('holdHead'); hide('holdBody'); hide('rollBody'); hide('receptor');
     }
 
     /**
@@ -1200,12 +1249,8 @@ class GameplayRenderer {
                 sprite.height = arrowSize;
 
                 // LOD: Simplify distant receptors (rare but possible with zoom mods)
-                const lodLevel = this._getLODLevel(receptorY);
-                if (lodLevel >= 1) {
-                    sprite.rotation = 0; // No rotation for simplified rendering
-                }
+                // Note: Rotation is kept correct even for LOD - orientation must not flip
 
-                this.layers.receptors.addChild(sprite);
                 receptorSprites++;
             } else {
                 this._returnSpriteToPool(sprite, 'receptor');
@@ -1228,6 +1273,10 @@ class GameplayRenderer {
         // Performance: Track sprites drawn this frame (includes hold bodies + note heads)
         let spritesDrawn = receptorCount;
 
+        // FIX: Adaptive quality for WebGL
+        const adaptive = gameState._adaptiveQuality || {};
+        const maxNotesWebGL = adaptive.isVeryLowFPS ? 64 : (adaptive.isLowFPS ? 96 : 200);
+
         // Pre-calculate appearance modifiers
         let appearanceType = null, appearanceOffset = 0, syncFadeActive = false;
         if (modConfig.appearance) {
@@ -1238,9 +1287,9 @@ class GameplayRenderer {
             syncFadeActive = true;
         }
 
-        const miniEffect = modConfig.effect && modConfig.effect.name === 'mini';
-        const drunkEffect = modConfig.effect && modConfig.effect.name === 'drunk';
-        const dizzyEffect = modConfig.effect && modConfig.effect.name === 'dizzy';
+        const miniEffect = !adaptive.skipEffects && modConfig.effect && modConfig.effect.name === 'mini';
+        const drunkEffect = !adaptive.skipEffects && modConfig.effect && modConfig.effect.name === 'drunk';
+        const dizzyEffect = !adaptive.skipEffects && modConfig.effect && modConfig.effect.name === 'dizzy';
         const flipEffect = modConfig.effect && modConfig.effect.name === 'flip';
         const invertEffect = modConfig.effect && modConfig.effect.name === 'invert';
 
@@ -1315,7 +1364,6 @@ class GameplayRenderer {
                 sprite.alpha = finalAlpha;
                 sprite.tint = 0xFFFFFF;
 
-                this.layers.holdBodies.addChild(sprite);
                 this.activeSprites.set(note, sprite);
                 spritesDrawn++;
             } else {
@@ -1324,9 +1372,14 @@ class GameplayRenderer {
         }
 
         // Second pass: Render note heads
+        let noteHeadCount = 0;
         for (const note of visibleNotes) {
             if (note.processed && note.holdState !== 'active') continue;
             if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) continue;
+
+            // FIX: Limit note heads rendered for performance
+            if (noteHeadCount >= maxNotesWebGL) break;
+            noteHeadCount++;
 
             // Calculate Y position
             const timeDiff = note.time - currentTime;
@@ -1421,8 +1474,7 @@ class GameplayRenderer {
                 // LOD: Reduce visual complexity for distant notes
                 const lodLevel = this._getLODLevel(headY);
                 if (lodLevel === 2) {
-                    // Minimal detail: Skip rotation for far notes
-                    sprite.rotation = 0;
+                    // Minimal detail: Just fade, keep rotation correct
                     sprite.alpha *= 0.8; // Slight fade for very distant notes
                 }
 
@@ -1438,7 +1490,6 @@ class GameplayRenderer {
                 sprite.width = arrowSize;
                 sprite.height = arrowSize;
 
-                this.layers.noteHeads.addChild(sprite);
                 this.activeSprites.set(note, sprite);
                 spritesDrawn++;
             } else if (sprite) {
@@ -1599,9 +1650,104 @@ function startApp() {
         audioCtx.resume();
     }
 
-    // Add logic to show the specific screen we want first (setup-panel)
-    // setScreen('setup-panel') is handled by default mostly, but let's be explicit
-    // renderSongList was already called, so setup-panel should be ready.
+    // --- INITIALIZE GAMEPAD SUPPORT ---
+    if (typeof GamepadManager !== 'undefined') {
+        GamepadManager.init();
+        // Connect gamepad input to game input handler
+        GamepadManager.onInput = handleGamepadInput;
+        console.log('[Gamepad] Support initialized');
+    }
+
+    // --- INITIALIZE WEB WORKER FOR AUDIO DECODING ---
+    if (useAudioWorker && typeof Worker !== 'undefined') {
+        try {
+            audioWorker = new Worker('audio-worker.js');
+            audioWorker.onmessage = handleAudioWorkerMessage;
+            console.log('[AudioWorker] Web Worker initialized for audio decoding');
+        } catch (e) {
+            console.warn('[AudioWorker] Failed to initialize:', e);
+            useAudioWorker = false;
+        }
+    }
+
+    // --- AUDIO ENGINE: Pre-init context so AudioWorklet is ready before first song ---
+    AudioEngine.init();
+}
+
+/**
+ * Handle messages from the audio decoding Web Worker
+ */
+function handleAudioWorkerMessage(e) {
+    const { type, id, audioData, sampleRate, error, channels, length, duration, channelData } = e.data;
+
+    if (type === 'decoded') {
+        console.log(`[AudioWorker] Decoded audio: ${channels}ch, ${sampleRate}Hz, ${duration.toFixed(2)}s`);
+
+        // Reconstruct AudioBuffer from worker data
+        if (audioCtx && channelData) {
+            const buffer = audioCtx.createBuffer(channels, length, sampleRate);
+            for (let i = 0; i < channels; i++) {
+                if (channelData[i]) {
+                    buffer.copyToChannel(channelData[i], i);
+                }
+            }
+
+            // Store the decoded buffer
+            audioBuffer = buffer;
+
+            // Notify that audio is ready (if there's a pending callback)
+            if (window.onAudioDecoded) {
+                window.onAudioDecoded(buffer);
+            }
+        }
+    } else if (type === 'decodeInMain') {
+        // Worker can't decode - do it on main thread
+        console.log('[AudioWorker] Falling back to main thread decode:', e.data.message);
+        useAudioWorker = false;
+
+        if (audioData && window.onAudioDecoded) {
+            // Decode on main thread
+            audioCtx.decodeAudioData(audioData.slice(0))
+                .then(buffer => {
+                    audioBuffer = buffer;
+                    window.onAudioDecoded(buffer);
+                })
+                .catch(err => {
+                    console.error('[AudioWorker] Main thread decode failed:', err);
+                    window.onAudioDecoded(null);
+                });
+        }
+    } else if (type === 'error') {
+        console.error('[AudioWorker] Decode error:', error);
+        // Fall back to main-thread decoding
+        useAudioWorker = false;
+        if (window.onAudioDecoded) {
+            window.onAudioDecoded(null);
+        }
+    }
+}
+
+/**
+ * Decode audio using Web Worker (non-blocking)
+ */
+function decodeAudioInWorker(arrayBuffer, callback) {
+    if (!useAudioWorker || !audioWorker) {
+        // Fall back to main thread
+        return false;
+    }
+
+    const id = Date.now().toString();
+    window.onAudioDecoded = callback;
+
+    // Transfer the array buffer to the worker
+    audioWorker.postMessage({
+        type: 'decode',
+        audioData: arrayBuffer,
+        sampleRate: audioCtx ? audioCtx.sampleRate : 48000,
+        id: id
+    }, [arrayBuffer]);
+
+    return true;
 }
 
 async function loadLocalSong() {
@@ -2499,7 +2645,40 @@ async function startGameFromMenu() {
 
         try {
             const ab = await song.audioBlob.arrayBuffer();
-            const decoded = await audioCtx.decodeAudioData(ab);
+            let decoded = null;
+
+            // --- TRY WEB WORKER DECODING FIRST (non-blocking) ---
+            if (useAudioWorker && audioWorker) {
+                setText('loading-text', "Decoding Audio (Worker)...");
+                const workerDecoded = await new Promise((resolve, reject) => {
+                    const id = Date.now().toString();
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Worker decode timeout'));
+                    }, 30000);
+
+                    window.onAudioDecoded = (buffer) => {
+                        clearTimeout(timeout);
+                        resolve(buffer);
+                    };
+
+                    audioWorker.postMessage({
+                        type: 'decode',
+                        audioData: ab,
+                        sampleRate: audioCtx.sampleRate,
+                        id: id
+                    }, [ab]); // Transfer ownership of buffer
+                });
+                decoded = workerDecoded;
+            }
+
+            // --- FALLBACK TO MAIN THREAD IF WORKER FAILED ---
+            if (!decoded) {
+                setText('loading-text', "Decoding Audio...");
+                // Need to get a fresh copy since we transferred the original
+                const ab2 = await song.audioBlob.arrayBuffer();
+                decoded = await audioCtx.decodeAudioData(ab2);
+            }
+
             audioBuffer = decoded; // Set global buffer
 
             // Create URL for Audio Element (Pitch Preservation)
@@ -2864,10 +3043,8 @@ function triggerFail() {
     gameState.failed = true;
     gameState.isPlaying = false;
 
-    // Stop Audio (Vinyl)
-    if (audioCtx.state === 'running') audioCtx.suspend();
-    // Stop Audio (Stretch)
-    if (gameState.audioEl) gameState.audioEl.pause();
+    // Stop Audio
+    AudioEngine.pause();
 
     document.getElementById('failed-overlay').style.display = 'flex';
     // Trigger reflow or use RAF to ensure transition happens
@@ -3047,12 +3224,16 @@ function triggerJudgement(note, offsetMs, isMiss = false, currentTime) {
 
             // Fix: Use correct Song Time for initialization
             const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-            if (gameState.mode === 'stretch' && gameState.audioEl) {
-                note.lastPressTime = gameState.audioEl.currentTime;
-            } else {
-                note.lastPressTime = (audioCtx.currentTime - gameState.startTime) * rate;
+            note.lastPressTime = AudioEngine.getCurrentTime(rate);
+        } else if (!isMiss) {
+            // FIX: Only hide notes on Great or better (Marvelous, Perfect, Great)
+            // For Good/Bad judgments, keep note visible until it scrolls off
+            const isGreatOrBetter = judgeText === 'MARVELOUS' || judgeText === 'PERFECT' || judgeText === 'GREAT';
+            if (isGreatOrBetter) {
+                note.processed = true;
             }
-        } else if (!isMiss) { note.processed = true; }
+            // For Good/Bad: note.processed remains false, note stays visible
+        }
 
         gameState.detailedHits.push({
             time: currentTime,
@@ -3776,17 +3957,23 @@ function startReplay(scoreEntry, songOverride, chartOverride) {
 }
 
 function quitGame() {
-    if (gameState.startTimeout) { clearTimeout(gameState.startTimeout); gameState.startTimeout = null; }
-    if (audioSource) {
-        try { audioSource.stop(); } catch (e) { console.warn(e); }
-    }
-    if (gameState.audioEl) {
-        gameState.audioEl.pause();
-        gameState.audioEl = null;
-    }
+    GameLoop.stop();
+    AudioEngine.stop();
+    audioSource = null;
+    gameState.audioEl = null;
     gameState.isPlaying = false;
     gameState.isPaused = false;
     gameState.failed = false;
+
+    // Disable InputEngine gameplay polling, re-enable GamepadManager for menu navigation
+    if (typeof InputEngine !== 'undefined') {
+        InputEngine.enabled = false;
+        InputEngine.onInput = null;
+    }
+    if (typeof GamepadManager !== 'undefined') {
+        GamepadManager.enabled = true;
+        GamepadManager.startPolling();
+    }
 
     setScreen('setup-panel');
 
@@ -3887,6 +4074,11 @@ function setupCanvas() {
             console.log('[setupCanvas] Using Canvas 2D fallback');
         }
     }
+
+    // Initialize Renderer module with canvas + existing WebGL renderer
+    if (typeof Renderer !== 'undefined') {
+        Renderer.init(canvas, gameplayRenderer);
+    }
 }
 function getNoteRowIndex(beat) { const b = Math.abs(beat); const epsilon = 0.01; const isSnap = (div) => Math.abs((b * div) - Math.round(b * div)) < epsilon; if (isSnap(1)) return 0; if (isSnap(2)) return 1; if (isSnap(3)) return 2; if (isSnap(4)) return 3; if (isSnap(6)) return 4; if (isSnap(8)) return 5; if (isSnap(12)) return 6; return 7; }
 function stepReplay(dir) {
@@ -3895,21 +4087,11 @@ function stepReplay(dir) {
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
     const dt = dir * 0.0166; // 1 frame (60fps) approx
 
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        gameState.audioEl.currentTime = Math.max(0, gameState.audioEl.currentTime + dt);
-    } else {
-        // Vinyl Mode
-        // Time = (AudioCtx - Start) * Rate
-        // Start = AudioCtx - (Time/Rate)
-        // We want TimeNew = TimeOld + dt
-        // StartNew = AudioCtx - (TimeOld + dt)/Rate
-        // StartNew = AudioCtx - (TimeOld/Rate) - (dt/Rate)
-        // StartNew = StartOld - (dt/Rate)
-        gameState.startTime -= (dt / rate);
-    }
+    AudioEngine.seek(dt, rate);
+    // Sync legacy startTime back
+    gameState.startTime = AudioEngine.startTime;
 
-    gameState.singleFrameStep = true;
-    requestAnimationFrame(gameLoop);
+    GameLoop.requestSingleFrame();
 } window.stepReplay = stepReplay;
 
 function viewScoreResults(entry) {
@@ -4011,6 +4193,16 @@ function renderNotesBatched(visibleNotes, rotations, currentTime) {
     const drawSize = gameConfig.arrowSize;
     const offset = -drawSize / 2;
 
+    // FIX: Adaptive performance limits based on current FPS
+    const adaptive = gameState._adaptiveQuality || {};
+    const MAX_VISIBLE_NOTES = adaptive.isVeryLowFPS ? 64 : (adaptive.isLowFPS ? 96 : 128);
+    const LOD_FAR_DISTANCE = canvas.height * (adaptive.isVeryLowFPS ? 0.5 : 0.8);
+    const CULL_DISTANCE = canvas.height * (adaptive.isVeryLowFPS ? 0.9 : 1.2);
+    const SKIP_EFFECTS = adaptive.skipEffects;
+
+    // Early exit if too many notes (emergency culling)
+    const noteCount = Math.min(visibleNotes.length, MAX_VISIBLE_NOTES);
+
     // Pre-calculate appearance modifiers once per frame
     let appearanceType = null, appearanceOffset = 0, syncFadeActive = false;
     if (modConfig.appearance) {
@@ -4024,7 +4216,7 @@ function renderNotesBatched(visibleNotes, rotations, currentTime) {
     // --- PHASE 1: Render Hold/Roll Bodies ---
     // Batch by type to minimize pattern switching
     ctx.save();
-    for (let i = 0; i < visibleNotes.length; i++) {
+    for (let i = 0; i < noteCount; i++) {
         const note = visibleNotes[i];
         if (note.type !== 'hold' && note.type !== 'roll') continue;
         if (!note.endTime) continue;
@@ -4066,10 +4258,10 @@ function renderNotesBatched(visibleNotes, rotations, currentTime) {
             bodyStartY = gameConfig.receptorY + halfCol;
         }
 
-        // Visibility check
+        // Visibility check with aggressive culling for performance
         const bodyTop = Math.min(bodyStartY, bodyEndY);
         const bodyBottom = Math.max(bodyStartY, bodyEndY);
-        if (bodyBottom < -100 || bodyTop > canvas.height + 100) continue;
+        if (bodyBottom < -CULL_DISTANCE || bodyTop > canvas.height + CULL_DISTANCE) continue;
 
         // Render body
         const isHold = note.type === 'hold';
@@ -4111,13 +4303,14 @@ function renderNotesBatched(visibleNotes, rotations, currentTime) {
 
     // --- PHASE 2: Render Note Heads ---
     ctx.save();
-    const miniEffect = modConfig.effect && modConfig.effect.name === 'mini';
-    const drunkEffect = modConfig.effect && modConfig.effect.name === 'drunk';
-    const dizzyEffect = modConfig.effect && modConfig.effect.name === 'dizzy';
+    const miniEffect = !SKIP_EFFECTS && modConfig.effect && modConfig.effect.name === 'mini';
+    const drunkEffect = !SKIP_EFFECTS && modConfig.effect && modConfig.effect.name === 'drunk';
+    const dizzyEffect = !SKIP_EFFECTS && modConfig.effect && modConfig.effect.name === 'dizzy';
     const flipEffect = modConfig.effect && modConfig.effect.name === 'flip';
     const invertEffect = modConfig.effect && modConfig.effect.name === 'invert';
 
-    for (let i = 0; i < visibleNotes.length; i++) {
+    let renderedCount = 0;
+    for (let i = 0; i < noteCount; i++) {
         const note = visibleNotes[i];
 
         // Skip hold bodies (already rendered) and processed notes
@@ -4137,8 +4330,12 @@ function renderNotesBatched(visibleNotes, rotations, currentTime) {
             headY = gameConfig.receptorY;
         }
 
-        // Visibility check
-        if (headY < -100 || headY > canvas.height + 100) continue;
+        // FIX: Aggressive distance culling for performance
+        const distFromReceptor = Math.abs(headY - gameConfig.receptorY);
+        if (headY < -CULL_DISTANCE || headY > canvas.height + CULL_DISTANCE) continue;
+
+        // FIX: LOD - skip far notes for performance (keep visible but simpler)
+        const useLOD = distFromReceptor > LOD_FAR_DISTANCE;
 
         // Calculate X with effects
         let drawX = note.col * gameConfig.columnWidth;
@@ -4172,16 +4369,23 @@ function renderNotesBatched(visibleNotes, rotations, currentTime) {
         if (note.type === 'fake') alpha *= 0.2;
         if (alpha <= 0.01) continue;
 
-        // Calculate rotation
+        // Calculate rotation (always apply correct orientation)
         let rotation = rotations[note.col];
-        if (dizzyEffect) {
+        if (dizzyEffect && !useLOD) {
             rotation += (currentTime * 100) % 360;
         }
+
+        // FIX: Emergency culling - skip very far notes entirely
+        if (renderedCount > MAX_VISIBLE_NOTES / 2 && distFromReceptor > LOD_FAR_DISTANCE) {
+            continue;
+        }
+        renderedCount++;
 
         // Render the head
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.translate(drawX + halfCol, headY + halfCol);
+        // FIX: Always apply rotation - orientation must not flip to default
         ctx.rotate(rotation * Math.PI / 180);
 
         if (miniEffect) {
@@ -4534,30 +4738,306 @@ function drawNPSGraph(currentTime) {
     ctx.stroke();
 }
 
-function gameLoop() {
-    if (!gameState.isPlaying || (gameState.isPaused && !gameState.singleFrameStep)) return;
-    if (gameState.singleFrameStep) {
-        gameState.singleFrameStep = false;
-        // Logic will run once then next frame will start. 
-        // We don't change isPaused here, so next frame recursion (requestAnimationFrame) will be blocked again.
-        // However, we invoke requestAnimationFrame at the end.
+// =============================================
+//  GAME TICK — Logic update (one call per frame)
+// =============================================
+function _gameTick(dtMs, timestamp) {
+    const now = timestamp;
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    let currentTime = AudioEngine.getCurrentTime(rate);
+
+    // --- AUDIO OFFSET ---
+    if (userConfig.globalOffset) {
+        currentTime += (userConfig.globalOffset / 1000);
+    }
+    gameState.lastCalculatedTime = currentTime;
+
+    // --- SYNC MODE ---
+    if (window.isSyncMode) {
+        const instr = document.getElementById('sync-instruction');
+        if (instr) {
+            instr.style.opacity = currentTime > 4.0 ? Math.min(1, currentTime - 4.0).toString() : '0';
+        }
+        if (typeof lastSyncCount === 'undefined' || lastSyncCount !== window.syncBuffer.length) {
+            updateSyncStats();
+            lastSyncCount = window.syncBuffer.length;
+        }
+        const lastNote = gameState.notes[gameState.notes.length - 1];
+        if (lastNote && currentTime > lastNote.time + 1.0) {
+            AudioEngine.stop();
+            gameState.isPlaying = false;
+            GameLoop.stop();
+            startGameFromMenu().catch(e => console.error('[SYNC] Restart failed:', e));
+            return;
+        }
     }
 
-    // FPS / Latency Calculation
-    const now = performance.now();
-    const frameTime = now - gameState.lastFrameTime;
-    gameState.lastFrameTime = now;
+    gameState.globalFrame++;
 
-    // Throttle UI Update (every 200ms)
+    // --- BPM UPDATE ---
+    if (gameState.chart && gameState.chart.bpms) {
+        if (typeof gameState.bpmIndex === 'undefined') {
+            gameState.bpmIndex = 0;
+            gameState.lastBPM = getCurrentBPM();
+        }
+        const currentBpm = getCurrentBPM();
+        if (currentBpm !== gameState.lastBPM) {
+            gameState.lastBPM = currentBpm;
+            updateScrollSpeed(rate);
+        }
+        const displayBPM = currentBpm * rate;
+        // Throttle BPM text update (~200ms via FPS timer)
+        if (gameState.fpsTimer === 0) {
+            if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
+                setText('hud-val-bpm', displayBPM.toFixed(2));
+                gameState.lastBPMUpdateVal = displayBPM;
+            }
+        }
+    }
+
+    // --- AUTOPLAY ---
+    if (gameState.isAutoplay) {
+        gameState.heldKeys = [false, false, false, false];
+        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+            const n = gameState.activeNotes[i];
+            if (n.time > currentTime + 0.1) break;
+            if (!n.processed && n.holdState !== 'active' && n.type !== 'mine') {
+                const timeDiff = (n.time - currentTime) * 1000;
+                if (Math.abs(timeDiff) <= 1) {
+                    processInput(n.col, 'down', n.time, rate);
+                    setTimeout(() => processInput(n.col, 'up', n.time, rate), 50);
+                }
+            }
+            if ((n.type === 'hold' || n.type === 'roll') && n.holdState === 'active') {
+                gameState.heldKeys[n.col] = true;
+                if (n.type === 'roll') n.lastPressTime = currentTime;
+            }
+        }
+    }
+
+    // --- REPLAY ---
+    if (gameState.isReplay && gameState.replayLog) {
+        const log = gameState.replayLog;
+        while (gameState.replayIndex < log.length) {
+            const evt = log[gameState.replayIndex];
+            if (evt.t <= currentTime) {
+                processInput(evt.c, evt.e === 1 ? 'down' : 'up', currentTime, rate);
+                gameState.replayIndex++;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // --- ADVANCE NOTE CURSOR ---
+    while (gameState.firstActiveNoteIndex < gameState.activeNotes.length) {
+        if (!gameState.activeNotes[gameState.firstActiveNoteIndex].processed) break;
+        gameState.firstActiveNoteIndex++;
+    }
+
+    // --- BUILD VISIBLE NOTES ---
+    // FIX: Optimized adaptive quality check
+    const avgFrameTime = GameLoop.stats.frameTime;
+    const isLowFPS = avgFrameTime > 20;
+    const isVeryLowFPS = avgFrameTime > 33;
+
+    if (!gameState.colsActive) gameState.colsActive = [false, false, false, false];
+    gameState.colsActive[0] = false; gameState.colsActive[1] = false;
+    gameState.colsActive[2] = false; gameState.colsActive[3] = false;
+    if (!gameState.visibleNotesCache) gameState.visibleNotesCache = [];
+    const visibleNotes = gameState.visibleNotesCache;
+    visibleNotes.length = 0;
+
+    const scrollSpeed = gameConfig.scrollSpeed;
+    // FIX: Reduce visible time window on low FPS to cull more notes
+    const timeWindowBuffer = isVeryLowFPS ? 1.0 : (isLowFPS ? 1.5 : 2.0);
+    const maxVisibleTime = currentTime + (canvas.height / scrollSpeed) * (isVeryLowFPS ? 0.7 : 1.0) + timeWindowBuffer;
+    const minVisibleTime = currentTime - (isVeryLowFPS ? 0.3 : 1.0);
+
+    // Build spatial index on first frame
+    if (!gameState.noteSpatialIndex && gameState.activeNotes.length > 0) {
+        const bucketSize = 2.0;
+        const index = new Map();
+        const lastNote = gameState.activeNotes[gameState.activeNotes.length - 1];
+        const totalBuckets = Math.ceil(lastNote.time / bucketSize) + 1;
+        for (let i = 0; i < totalBuckets; i++) index.set(i, []);
+        for (let i = 0; i < gameState.activeNotes.length; i++) {
+            const note = gameState.activeNotes[i];
+            const bucket = Math.floor(note.time / bucketSize);
+            const arr = index.get(bucket);
+            if (arr) arr.push(note);
+        }
+        gameState.noteSpatialIndex = { buckets: index, bucketSize: bucketSize, totalBuckets: totalBuckets };
+    }
+
+    if (gameState.noteSpatialIndex) {
+        const { buckets, bucketSize, totalBuckets } = gameState.noteSpatialIndex;
+        const startBucket = (minVisibleTime > 0 ? Math.floor(minVisibleTime / bucketSize) : 0);
+        const endBucket = Math.floor(maxVisibleTime / bucketSize);
+
+        for (let b = startBucket; b <= endBucket && b < totalBuckets; b++) {
+            const bucketNotes = buckets.get(b);
+            if (!bucketNotes) continue;
+            const count = bucketNotes.length;
+            for (let i = 0; i < count; i++) {
+                const note = bucketNotes[i];
+                if (note.holdState === 'active') {
+                    gameState.colsActive[note.col] = true;
+                    if (currentTime <= note.endTime + 0.5) visibleNotes.push(note);
+                    continue;
+                }
+                if (note.time > maxVisibleTime) continue;
+                if (note.time < minVisibleTime) continue;
+                visibleNotes.push(note);
+            }
+        }
+    } else {
+        for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
+            const note = gameState.activeNotes[i];
+            if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+                gameState.colsActive[note.col] = true;
+            }
+            if (note.time > maxVisibleTime) break;
+            visibleNotes.push(note);
+        }
+    }
+
+    // --- PROCESS NOTE LOGIC (holds, mines, misses, autoplay hits) ---
+    for (let j = 0; j < visibleNotes.length; j++) {
+        const note = visibleNotes[j];
+
+        // Hold/Roll logic
+        if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+            if (currentTime >= note.endTime) {
+                note.holdState = 'ok';
+                triggerHoldJudgement(note, true, currentTime);
+                if (gameState.heldKeys[note.col]) {
+                    if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
+                    gameState.needsRelease[note.col] = true;
+                }
+                continue;
+            }
+            const keyHeld = gameState.heldKeys[note.col];
+            if (note.type === 'hold') {
+                if (!keyHeld) {
+                    if (!note.letGoTime) note.letGoTime = currentTime;
+                    if ((currentTime - note.letGoTime) * 1000 > 250) {
+                        note.holdState = 'ng';
+                        triggerHoldJudgement(note, false, currentTime);
+                        if (gameState.heldKeys[note.col]) {
+                            if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
+                            gameState.needsRelease[note.col] = true;
+                        }
+                    }
+                } else {
+                    note.letGoTime = null;
+                }
+            } else if (note.type === 'roll') {
+                const limit = 0.5;
+                const td = currentTime - note.lastPressTime;
+                if (td > limit) {
+                    note.holdState = 'ng';
+                    triggerHoldJudgement(note, false, currentTime);
+                    if (gameState.heldKeys[note.col]) {
+                        if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
+                        gameState.needsRelease[note.col] = true;
+                    }
+                } else {
+                    note.rollAlpha = Math.max(0.2, 1 - (td / limit));
+                }
+            }
+        }
+
+        if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') continue;
+        if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) { note.processed = true; continue; }
+
+        const timeDiff = note.time - currentTime;
+
+        // Mine
+        if (note.type === 'mine' && !note.processed) {
+            const realMsDiff = (timeDiff * 1000) / rate;
+            if (Math.abs(realMsDiff) <= J_MINE_WINDOW) {
+                if (gameState.heldKeys[note.col] && !gameState.isAutoplay) {
+                    triggerJudgement(note, realMsDiff, false, currentTime);
+                }
+            }
+            if (realMsDiff < -J_MINE_WINDOW) { note.processed = true; continue; }
+        }
+
+        // Autoplay hit
+        if (gameState.isAutoplay && !note.processed && !note.hit && note.type !== 'mine') {
+            if (timeDiff <= 0) {
+                note.hit = true;
+                gameState.heldKeys[note.col] = true;
+                triggerJudgement(note, 0, false, currentTime);
+                if (note.type === 'hold' || note.type === 'roll') {
+                    note.holdState = 'active';
+                } else {
+                    setTimeout(() => gameState.heldKeys[note.col] = false, 50);
+                }
+                continue;
+            }
+        }
+
+        if (gameState.isAutoplay && (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
+            gameState.heldKeys[note.col] = true;
+            if (currentTime >= note.endTime) gameState.heldKeys[note.col] = false;
+        }
+
+        // Miss
+        if (timeDiff < -((J_MISS_WINDOW / 1000) * rate) && !note.hit && note.type !== 'mine' && note.holdState === 'inactive') {
+            note.processed = true;
+            triggerJudgement(note, J_MISS_WINDOW + 1, true, currentTime);
+            continue;
+        }
+    }
+
+    // Stash frame data for _gameRender
+    // FIX: Lock rotation mode at game start to prevent orientation flipping
+    if (!gameState._rotationModeLocked) {
+        gameState._useSpriteRotations = !!assets.loaded.arrowSprite;
+        gameState._rotationModeLocked = true;
+    }
+    const rotations = gameState._useSpriteRotations
+        ? (gameState.spriteRotations || (gameState.spriteRotations = [90, 0, 180, 270]))
+        : (gameState.vectorRotations || (gameState.vectorRotations = [270, 180, 0, 90]));
+
+    // FIX: Store adaptive quality state for render
+    gameState._adaptiveQuality = {
+        isLowFPS: isLowFPS,
+        isVeryLowFPS: isVeryLowFPS,
+        skipEffects: isVeryLowFPS
+    };
+
+    gameState._frameData = {
+        currentTime: currentTime,
+        rate: rate,
+        visibleNotes: visibleNotes,
+        rotations: rotations,
+        now: now
+    };
+}
+
+// =============================================
+//  GAME RENDER — Drawing + HUD (one call per frame, after tick)
+// =============================================
+function _gameRender(dtMs, timestamp) {
+    const fd = gameState._frameData;
+    if (!fd) return;
+    const { currentTime, rate, visibleNotes, rotations, now } = fd;
+
+    // --- FPS HUD ---
+    const frameTime = GameLoop.stats.frameTime;
     if (typeof gameState.fpsTimer === 'undefined') gameState.fpsTimer = 0;
+    // FIX: Throttle HUD updates more when FPS is low
+    const adaptive = gameState._adaptiveQuality || {};
+    const hudUpdateInterval = adaptive.isVeryLowFPS ? 500 : 200;
     gameState.fpsTimer += frameTime;
-
-    if (gameState.fpsTimer >= 200) {
+    if (gameState.fpsTimer >= hudUpdateInterval) {
         const fps = frameTime > 0 ? 1000 / frameTime : 0;
         const fpsEl = document.getElementById('hud-fps-counter');
         if (fpsEl) {
             fpsEl.innerHTML = `<span style="color:#fff">${Math.round(fps)}</span> FPS <span style="font-size:0.8em; color:#aaa">(${frameTime.toFixed(1)}ms)</span>`;
-            // Color Coding
             if (fps < 30) fpsEl.style.color = '#ff3333';
             else if (fps < 55) fpsEl.style.color = '#ffcc00';
             else fpsEl.style.color = 'rgba(255, 255, 255, 0.5)';
@@ -4565,468 +5045,97 @@ function gameLoop() {
         gameState.fpsTimer = 0;
     }
 
-    // Main game logic block
-    {
-        let currentTime = 0;
-        const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-
-        if (gameState.mode === 'stretch' && gameState.audioEl) {
-            if (!gameState.audioEl.paused) {
-                currentTime = gameState.audioEl.currentTime;
-            } else if (Date.now() < gameState.startTime) {
-                // Countdown phase
-                currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
-            }
-            // Check end
-            if (gameState.audioEl.ended) {
-                // Handle finish similar to audioSource.onended or simple timeout check
-            }
-        } else {
-            // Vinyl Mode
-            currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
-        }
-
-        // --- AUDIO OFFSET APPLICATION ---
-        if (userConfig.globalOffset) {
-            currentTime += (userConfig.globalOffset / 1000);
-        }
-
-        // Cache this for HUD elements and rendering
-        gameState.lastCalculatedTime = currentTime;
-
-        // --- SYNC INSTRUCTION FADE-IN ---
-        if (window.isSyncMode) {
-            const instr = document.getElementById('sync-instruction');
-            if (instr) {
-                // Fade in between 4s and 5s
-                if (currentTime > 4.0) {
-                    const opacity = Math.min(1, currentTime - 4.0);
-                    instr.style.opacity = opacity.toString();
-                } else {
-                    instr.style.opacity = '0';
-                }
-            }
-        }
-
-
-        // --- SYNC CALIBRATION LOOP (Retry-based approach) ---
-        if (window.isSyncMode) {
-            // Update Sync Stats UI
-            if (typeof lastSyncCount === 'undefined' || lastSyncCount !== window.syncBuffer.length) {
-                updateSyncStats();
-                lastSyncCount = window.syncBuffer.length;
-            }
-
-            // Check if chart ended - if so, restart via retry
-            const lastNote = gameState.notes[gameState.notes.length - 1];
-            if (lastNote && currentTime > lastNote.time + 1.0) {
-
-
-                // Stop current game
-                if (window.audioSource) try { window.audioSource.stop(); } catch (e) { }
-                if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
-                gameState.isPlaying = false;
-
-                // Restart the chart using the normal game start function
-                startGameFromMenu().catch(e => console.error('[SYNC] Restart failed:', e));
-
-                // Exit game loop - it will restart with fresh state
-                return;
-            }
-        }
-
-        // Speed is handled by updateScrollSpeed() called on init and rate change.
-        // Removed inline override that was causing rate scaling issues.
-
-        gameState.globalFrame++;
-
-        // Update BPM Display
-        if (gameState.chart && gameState.chart.bpms) {
-            // Find BPM at current time.
-            // Since converting Time -> Beat is complex with stops/warps, 
-            // and we prioritize performance, let's approximate or use pre-calculated events if available.
-            // Ideally, we'd have a 'cursor' for BPMs.
-            // Let's use a cached index `gameState.bpmIndex`.
-            if (typeof gameState.bpmIndex === 'undefined') {
-                gameState.bpmIndex = 0;
-                gameState.lastBPM = getCurrentBPM();
-            }
-
-            const currentBpm = getCurrentBPM();
-            if (currentBpm !== gameState.lastBPM) {
-                gameState.lastBPM = currentBpm;
-                updateScrollSpeed(rate);
-                const bpmEl = document.getElementById('hud-val-bpm');
-                if (bpmEl) bpmEl.innerText = Math.abs(Math.round(currentBpm));
-            }
-
-            const bpms = gameState.chart.bpms;
-            // Advance cursor
-            // Note: bpms are usually in BEATS. We have TIME.
-            // We need the `time` for each BPM change.
-            // If the parser didn't calculate absolute times for BPM changes, we are stuck.
-            // The provided parser usually does `calculateTimingData`?
-            // If `gameState.chart.bpms` has `.time` prop, we are good.
-            // Let's Assume they might NOT. 
-            // If they don't, we can't easily display LIVE BPM without sync logic.
-            // *Fallback*: Display the initial BPM or a fixed value if generic.
-            // *Check*: parsedSM usually has beat/value.
-            // *Recovery*: If we can't do live, verify if user accepts static.
-            // *Better*: Let's peek at `gameState.activeNotes`. They have `beat` and `time`.
-            // We can interpolate currentBeat from nearby notes?
-
-            // Let's fallback to `gameState.startingBPM` inside `initGame` logic if we can't find it.
-            // But wait, user requested "current difficulty... as well as the BPM".
-            // It likely implies live BPM.
-
-            // Let's assume for this task that we can just display the initial for now if complexity is high,
-            // OR check if we have `timingData` with times.
-            // If I look at `initGame`, `calculateDetailedDifficulty` uses notes.
-
-            // Let's try to update it if `gameState.currentBPM` is set by other logic (e.g. scroll update).
-            if (gameState.currentBPM) {
-                setText('hud-val-bpm', Math.round(gameState.currentBPM));
-            }
-        }
-
-        // Update BPM Display
-        if (gameState.chart && gameState.chart.bpms) {
-            let currentBPM = 120;
-            if (typeof getCurrentBPM === 'function') {
-                currentBPM = getCurrentBPM();
-            } else if (gameState.chart.bpms.length > 0) {
-                currentBPM = gameState.chart.bpms[0].bpm || gameState.chart.bpms[0].value || 120;
-            }
-
-            const displayBPM = currentBPM * rate;
-
-            // Throttle BPM Text Update (every 200ms)
-            if (gameState.fpsTimer === 0) {
-                if (!gameState.lastBPMUpdateVal || Math.abs(gameState.lastBPMUpdateVal - displayBPM) > 0.01) {
-                    setText('hud-val-bpm', displayBPM.toFixed(2));
-                    gameState.lastBPMUpdateVal = displayBPM;
-                }
-            }
-        }
-
-        // --- AUTOPLAY LOGIC ---
-        if (gameState.isAutoplay) {
-            gameState.heldKeys = [false, false, false, false];
-            // Scan for new hits and maintain holds
-            for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
-                const n = gameState.activeNotes[i];
-
-                // Optimization: Don't scan too far into future
-                if (n.time > currentTime + 0.1) break;
-
-                // 1. Hit new notes at perfect timing (0.00ms offset)
-                if (!n.processed && n.holdState !== 'active' && n.type !== 'mine') {
-                    // Hit the note when currentTime is very close to note time (within 1ms)
-                    const timeDiff = (n.time - currentTime) * 1000; // Convert to ms
-                    if (Math.abs(timeDiff) <= 1) {
-                        // Hit at exactly the note time for 0.00ms offset
-                        processInput(n.col, 'down', n.time, rate);
-                        setTimeout(() => processInput(n.col, 'up', n.time, rate), 50);
-                    }
-                }
-                // 2. Maintain active Holds/Rolls
-                if ((n.type === 'hold' || n.type === 'roll') && n.holdState === 'active') {
-                    // processInput handles hold maintenance if 'down' is sent? 
-                    // processInput logic sets holds[col]=true but doesn't re-trigger hit.
-                    // But it updates roll lastPressTime? 
-                    // Actually the roll logic in processInput is: IF keydown, update lastPressTime.
-                    // Autoplay simulates KEY HOLD.
-                    gameState.heldKeys[n.col] = true;
-                    if (n.type === 'roll') n.lastPressTime = currentTime;
-                }
-            }
-        }
-
-        // --- REPLAY LOGIC ---
-        if (gameState.isReplay && gameState.replayLog) {
-            const log = gameState.replayLog;
-            // Process events up to current time
-            while (gameState.replayIndex < log.length) {
-                const evt = log[gameState.replayIndex];
-                // Check time. evt.t is Song Time.
-                if (evt.t <= currentTime) {
-                    // Apply Event
-                    const type = evt.e === 1 ? 'down' : 'up';
-                    processInput(evt.c, type, currentTime, rate);
-                    gameState.replayIndex++;
-                } else {
-                    break;
-                }
-            }
-        }
-
-
+    // --- NOTES + RECEPTORS ---
+    // Only clear if we are NOT using WebGL to avoid redundant bus traffic
+    if (!gameplayRenderer.useWebGL) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
 
-        // Update First Active Note (Skip old processed notes)
-        // Note: hit/missed notes set .processed=true.
-        while (gameState.firstActiveNoteIndex < gameState.activeNotes.length) {
-            if (!gameState.activeNotes[gameState.firstActiveNoteIndex].processed) break;
-            gameState.firstActiveNoteIndex++;
-        }
-
-        // Pre-calculate active holds for this frame to optimize drawReceptor
-        gameState.colsActive = [false, false, false, false];
-
-        // Determine visible Window using Spatial Index for O(1) lookup
-        // Reuse static array to reduce GC
-        if (!gameState.visibleNotesCache) gameState.visibleNotesCache = [];
-        const visibleNotes = gameState.visibleNotesCache;
-        visibleNotes.length = 0;
-
-        const scrollSpeed = gameConfig.scrollSpeed;
-        const maxVisibleTime = currentTime + (canvas.height / scrollSpeed) + 2.0; // Buffer
-        const minVisibleTime = currentTime - 1.0; // 1 second buffer for active holds
-
-        // Build spatial index on first frame (bucket size: 2 seconds)
-        if (!gameState.noteSpatialIndex && gameState.activeNotes.length > 0) {
-            const bucketSize = 2.0; // 2 seconds per bucket
-            const index = new Map();
-            const lastNote = gameState.activeNotes[gameState.activeNotes.length - 1];
-            const totalBuckets = Math.ceil(lastNote.time / bucketSize) + 1;
-
-            for (let i = 0; i < totalBuckets; i++) {
-                index.set(i, []);
-            }
-
-            for (let i = 0; i < gameState.activeNotes.length; i++) {
-                const note = gameState.activeNotes[i];
-                const bucket = Math.floor(note.time / bucketSize);
-                const bucketArray = index.get(bucket);
-                if (bucketArray) {
-                    bucketArray.push(note);
-                }
-            }
-
-            gameState.noteSpatialIndex = {
-                buckets: index,
-                bucketSize: bucketSize,
-                totalBuckets: totalBuckets
-            };
-        }
-
-        // Use spatial index if available, otherwise fall back to linear scan
-        if (gameState.noteSpatialIndex) {
-            const { buckets, bucketSize } = gameState.noteSpatialIndex;
-            const startBucket = Math.floor(Math.max(0, minVisibleTime) / bucketSize);
-            const endBucket = Math.floor(maxVisibleTime / bucketSize);
-
-            for (let b = startBucket; b <= endBucket && b < gameState.noteSpatialIndex.totalBuckets; b++) {
-                const bucketNotes = buckets.get(b);
-                if (!bucketNotes) continue;
-
-                for (let i = 0; i < bucketNotes.length; i++) {
-                    const note = bucketNotes[i];
-
-                    // Check for Active Hold (always render active holds regardless of time)
-                    if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-                        gameState.colsActive[note.col] = true;
-                        // Active holds are always visible if not expired
-                        if (currentTime <= note.endTime + 0.5) {
-                            visibleNotes.push(note);
-                        }
-                        continue;
-                    }
-
-                    // Skip if outside visible time window
-                    if (note.time > maxVisibleTime) continue;
-                    if (note.time < minVisibleTime && note.holdState !== 'active') continue;
-
-                    visibleNotes.push(note);
-                }
-            }
-        } else {
-            // Fallback: Linear scan (for compatibility)
-            for (let i = gameState.firstActiveNoteIndex; i < gameState.activeNotes.length; i++) {
-                const note = gameState.activeNotes[i];
-
-                if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-                    gameState.colsActive[note.col] = true;
-                }
-
-                if (note.time > maxVisibleTime) break;
-                visibleNotes.push(note);
-            }
-        }
-
-
-
-        // Cache rotation arrays to avoid recreation every frame
-        if (!gameState.spriteRotations) gameState.spriteRotations = [90, 0, 180, 270];
-        if (!gameState.vectorRotations) gameState.vectorRotations = [270, 180, 0, 90];
-        const rotations = assets.loaded.arrowSprite ? gameState.spriteRotations : gameState.vectorRotations;
-
-        // --- PROCESS GAME LOGIC FOR VISIBLE NOTES ---
-        // (Rendering happens after all logic is processed)
-        // Separate logic updates from rendering for performance
-        for (let j = 0; j < visibleNotes.length; j++) {
-            const note = visibleNotes[j];
-
-            // --- HOLD LOGIC ---
-            if ((note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-                // 1. Check if finalized (reached end)
-                if (currentTime >= note.endTime) {
-                    note.holdState = 'ok';
-                    triggerHoldJudgement(note, true, currentTime);
-                    if (gameState.heldKeys[note.col]) {
-                        if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
-                        gameState.needsRelease[note.col] = true;
-                    }
-                    continue;
-                }
-
-                // 2. Check input status
-                const keyHeld = gameState.heldKeys[note.col];
-                if (note.type === 'hold') {
-                    if (!keyHeld) {
-                        if (!note.letGoTime) note.letGoTime = currentTime;
-                        if ((currentTime - note.letGoTime) * 1000 > 250) {
-                            note.holdState = 'ng';
-                            triggerHoldJudgement(note, false, currentTime);
-                            if (gameState.heldKeys[note.col]) {
-                                if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
-                                gameState.needsRelease[note.col] = true;
-                            }
-                        }
-                    } else {
-                        note.letGoTime = null;
-                    }
-                } else if (note.type === 'roll') {
-                    const limit = 0.5;
-                    const timeDiff = currentTime - note.lastPressTime;
-                    if (timeDiff > limit) {
-                        note.holdState = 'ng';
-                        triggerHoldJudgement(note, false, currentTime);
-                        if (gameState.heldKeys[note.col]) {
-                            if (!gameState.needsRelease) gameState.needsRelease = [false, false, false, false];
-                            gameState.needsRelease[note.col] = true;
-                        }
-                    } else {
-                        note.rollAlpha = Math.max(0.2, 1 - (timeDiff / limit));
-                    }
-                }
-            }
-
-            if (note.processed && note.holdState !== 'active' && note.holdState !== 'missed') continue;
-
-            if (note.holdState === 'missed' && currentTime > note.endTime + 0.5) {
-                note.processed = true;
-                continue;
-            }
-
-            const timeDiff = note.time - currentTime;
-
-            // Mine Logic
-            if (note.type === 'mine' && !note.processed) {
-                const realMsDiff = (timeDiff * 1000) / rate;
-                if (Math.abs(realMsDiff) <= J_MINE_WINDOW) {
-                    if (gameState.heldKeys[note.col] && !gameState.isAutoplay) {
-                        triggerJudgement(note, realMsDiff, false, currentTime);
-                    }
-                }
-                if (realMsDiff < -J_MINE_WINDOW) { note.processed = true; continue; }
-            }
-
-            // AUTO PLAY LOGIC
-            if (gameState.isAutoplay && !note.processed && !note.hit && note.type !== 'mine') {
-                if (timeDiff <= 0) {
-                    note.hit = true;
-                    gameState.heldKeys[note.col] = true;
-                    triggerJudgement(note, 0, false, currentTime);
-                    if (note.type === 'hold' || note.type === 'roll') {
-                        note.holdState = 'active';
-                    } else {
-                        setTimeout(() => gameState.heldKeys[note.col] = false, 50);
-                    }
-                    continue;
-                }
-            }
-
-            if (gameState.isAutoplay && (note.type === 'hold' || note.type === 'roll') && note.holdState === 'active') {
-                gameState.heldKeys[note.col] = true;
-                if (currentTime >= note.endTime) {
-                    gameState.heldKeys[note.col] = false;
-                }
-            }
-
-            // MISS CHECK
-            if (timeDiff < -((J_MISS_WINDOW / 1000) * rate) && !note.hit && note.type !== 'mine' && note.holdState === 'inactive') {
-                note.processed = true;
-                triggerJudgement(note, J_MISS_WINDOW + 1, true, currentTime);
-                continue;
-            }
-        }
-
-        // --- RENDERING: WEBGL OR CANVAS 2D ---
-        // Try WebGL first, fall back to Canvas 2D if unavailable
+    if (typeof Renderer !== 'undefined' && Renderer._initialized) {
+        Renderer.renderGameplay({
+            visibleNotes: visibleNotes,
+            rotations: rotations,
+            currentTime: currentTime,
+            gameConfig: gameConfig,
+            gameState: gameState,
+            userConfig: userConfig,
+            modConfig: typeof modConfig !== 'undefined' ? modConfig : {},
+            assets: assets
+        });
+    } else {
         let webglRendered = false;
         if (gameplayRenderer.useWebGL && gameplayRenderer.app) {
             gameplayRenderer.enable();
             webglRendered = gameplayRenderer.render(visibleNotes, rotations, currentTime);
         }
-
-        // Canvas 2D fallback: Only used when WebGL is not available
         if (!webglRendered) {
             gameplayRenderer.disable();
-
-            // Clear canvas for fresh render
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Render receptors
             ctx.save();
             for (let i = 0; i < 4; i++) {
                 drawReceptor(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i);
             }
             ctx.restore();
-
-            // Batch render notes
             renderNotesBatched(visibleNotes, rotations, currentTime);
         }
+    }
 
-        // --- RENDER HOLD EXPLOSIONS ON TOP ---
+    // --- HOLD EXPLOSIONS ---
+    // FIX: Skip visual effects on very low FPS
+    if (!adaptive.isVeryLowFPS) {
         for (let i = 0; i < 4; i++) {
             drawHoldExplosion(i * gameConfig.columnWidth, gameConfig.receptorY, rotations[i], i, currentTime);
         }
+    }
 
+    // FIX: Skip expensive HUD elements on low FPS
+    if (!adaptive.isLowFPS) {
         drawErrorBar(currentTime);
         drawNPSGraph(currentTime);
+    }
 
-        // Cache totalTime to avoid repeated array access
-        if (!gameState.cachedTotalTime) {
-            gameState.cachedTotalTime = gameState.notes[gameState.notes.length - 1].time;
-        }
-        const totalTime = gameState.cachedTotalTime;
+    // --- PROGRESS BAR & TIME (throttled ~500ms) ---
+    if (!gameState.cachedTotalTime) {
+        gameState.cachedTotalTime = gameState.notes[gameState.notes.length - 1].time;
+    }
+    const totalTime = gameState.cachedTotalTime;
 
-        // Throttle Progress Bar & Time Updates (every 500ms to reduce DOM manipulation)
-        if (!gameState.lastTimeUpdate || now - gameState.lastTimeUpdate > 500) {
-            // Progress bar uses Song Time %
-            const prog = Math.min(100, Math.max(0, (currentTime / totalTime) * 100));
-            const progEl = document.getElementById('progress-bar');
-            if (progEl) progEl.style.width = prog + "%";
+    if (!gameState.lastTimeUpdate || now - gameState.lastTimeUpdate > (adaptive.isLowFPS ? 1000 : 500)) {
+        const prog = Math.min(100, Math.max(0, (currentTime / totalTime) * 100));
+        const progEl = document.getElementById('progress-bar');
+        if (progEl) progEl.style.width = prog + "%";
 
-            // Update time display
-            const formatTime = (t) => {
-                t = Math.max(0, t);
-                const m = Math.floor(t / 60);
-                const s = Math.floor(t % 60).toString().padStart(2, '0');
-                return `${m}:${s} `;
-            };
+        const formatTime = (t) => {
+            t = (t > 0) ? t : 0;
+            const m = (t / 60) | 0;
+            const s = ((t % 60) | 0).toString().padStart(2, '0');
+            return m + ":" + s + " ";
+        };
+        setText('time-elapsed', formatTime(currentTime / rate));
+        setText('time-total', formatTime(totalTime / rate));
+        gameState.lastTimeUpdate = now;
+    }
+}
 
-            setText('time-elapsed', formatTime(currentTime / rate));
-            setText('time-total', formatTime(totalTime / rate));
-            gameState.lastTimeUpdate = now;
-        }
-
-    } // End main game logic block
-
-    // Use requestAnimationFrame for smooth, consistent frame timing
-    // RAF syncs to your display's refresh rate (60Hz, 144Hz, 240Hz, etc.)
-    requestAnimationFrame(gameLoop);
+// =============================================
+//  GAME LOOP — Legacy entry point (delegates to GameLoop scheduler)
+// =============================================
+function gameLoop() {
+    // Wire callbacks once, then start the scheduler
+    if (!GameLoop._running) {
+        GameLoop.onPauseGuard = function () {
+            // Game over / quit — stop the loop entirely
+            if (!gameState.isPlaying) {
+                GameLoop.stop();
+                return true;
+            }
+            // Paused — skip frame but keep scheduling (resume will unblock)
+            return gameState.isPaused;
+        };
+        GameLoop.onTick = _gameTick;
+        GameLoop.onRender = _gameRender;
+        GameLoop.start();
+    }
 }
 
 
@@ -5186,12 +5295,7 @@ function togglePause() {
 
     // Prevent pause during countdown (negative time)
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-    let cTime = 0;
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        cTime = !gameState.audioEl.paused ? gameState.audioEl.currentTime : ((Date.now() - gameState.startTime) / 1000 * rate);
-    } else if (audioCtx) {
-        cTime = (audioCtx.currentTime - gameState.startTime) * rate;
-    }
+    let cTime = AudioEngine.getCurrentTime(rate);
     if (cTime < 0) return;
 
     if (gameState.isPaused) {
@@ -5202,13 +5306,14 @@ function togglePause() {
         gameState.isPaused = true;
         gameState.pauseStartTime = Date.now();
 
-        if (gameState.mode === 'stretch' && gameState.audioEl) {
-            gameState.audioEl.pause();
+        AudioEngine.pause();
+        {
             // Check for Invalid Condition (Pause after first note)
-            if (gameState.audioEl.currentTime >= gameState.firstNoteTime) {
+            if (AudioEngine.getCurrentTime(rate) >= gameState.firstNoteTime) {
                 gameState.hasPausedDuringPlay = true;
             }
-        } else if (audioCtx && audioCtx.state === 'running') {
+        }
+        if (audioCtx) {
             // Clear Type Logic
             let fcType = "Clear";
             if (gameState.failed) fcType = "Failed";
@@ -5245,13 +5350,6 @@ function togglePause() {
             // Store hits for Re-Judge Toggle
             lastDetailedHits = [...gameState.detailedHits];
             resultViewJudge = judgeDiff; // Init view to played diff
-            audioCtx.suspend();
-            // Check for Invalid Condition (Pause after first note)
-            const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-            const cTime = (audioCtx.currentTime - gameState.startTime) * rate;
-            if (cTime >= gameState.firstNoteTime) {
-                gameState.hasPausedDuringPlay = true;
-            }
         }
 
         document.getElementById('pause-menu').style.display = 'flex';
@@ -5293,28 +5391,20 @@ function resumeGame() {
     gameState.pauseCount++;
 
     // Resume Audio
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        gameState.audioEl.play();
-    } else if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
+    AudioEngine.resume();
 
     document.getElementById('pause-menu').style.display = 'none';
-    requestAnimationFrame(gameLoop);
+    // GameLoop is already running (onPauseGuard unblocks when isPaused flips)
 }
 window.resumeGame = resumeGame;
 
 function retryCurrentChart() {
     if (!gameState || !gameState.isPlaying) return;
 
-    // Stop current audio
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        gameState.audioEl.pause();
-        gameState.audioEl.currentTime = 0;
-    } else if (audioSource) {
-        audioSource.stop();
-        audioSource = null;
-    }
+    // Stop current loop + audio
+    GameLoop.stop();
+    AudioEngine.stop();
+    audioSource = null;
 
     // Hide pause menu if open
     document.getElementById('pause-menu').style.display = 'none';
@@ -5348,7 +5438,7 @@ function retryCurrentChart() {
     const audioUrl = URL.createObjectURL(song.audioBlob);
 
     // Reinitialize the game with the same settings
-    audioCtx = new AudioContext();
+    audioCtx = AudioEngine.init();
     fetch(audioUrl)
         .then(res => res.arrayBuffer())
         .then(buf => audioCtx.decodeAudioData(buf))
@@ -5620,16 +5710,17 @@ function handleInput(e) {
 
     // Determine Rate and Current Time (Song Time)
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
-    let currentTime = 0;
-    if (gameState.mode === 'stretch' && gameState.audioEl) {
-        if (!gameState.audioEl.paused) {
-            currentTime = gameState.audioEl.currentTime;
-        } else if (Date.now() < gameState.startTime) {
-            // Countdown phase
-            currentTime = (Date.now() - gameState.startTime) / 1000 * rate;
-        }
+
+    // Sub-frame timing: use e.timeStamp to back-calculate the precise
+    // song time at the moment of keypress (not when the handler runs).
+    // This eliminates up to 1 frame (~8-16ms) of event-queue delay.
+    // Also compensates audio output latency so timing matches what
+    // the player hears, not what the clock says.
+    let currentTime;
+    if (e.timeStamp && AudioEngine.performanceTimeToSongTime) {
+        currentTime = AudioEngine.performanceTimeToSongTime(e.timeStamp, rate);
     } else {
-        currentTime = (audioCtx.currentTime - gameState.startTime) * rate;
+        currentTime = AudioEngine.getCurrentTime(rate);
     }
 
     const key = e.key.toLowerCase();
@@ -5643,9 +5734,6 @@ function handleInput(e) {
 
     // RECORDING
     if (!gameState.failed && !gameState.isPaused) {
-        // Simple compression: t=time, c=col, e=event(0:down, 1:up)
-        // Store string fixed to save space? or number? Number is fine JSON handles it.
-        // using '1' and '0' for type might be slightly smaller in JSON than 'down'/'up'
         gameState.replayLog.push({
             t: parseFloat(currentTime.toFixed(3)),
             c: colIndex,
@@ -5658,12 +5746,64 @@ function handleInput(e) {
 } window.addEventListener('keydown', handleInput); window.addEventListener('keyup', handleInput); window.addEventListener('resize', () => {
     if (gameState.isPlaying) {
         setupCanvas();
-        // Also resize WebGL renderer if active
-        if (gameplayRenderer.useWebGL) {
+        // Renderer.init() called inside setupCanvas handles resize;
+        // also explicitly resize for the WebGL layer
+        if (typeof Renderer !== 'undefined' && Renderer._initialized) {
+            Renderer.resize();
+        } else if (gameplayRenderer.useWebGL) {
             gameplayRenderer.resize();
         }
     }
 });
+
+/**
+ * Handle gamepad/controller input events
+ * Routes to the same processInput as keyboard for consistent handling
+ */
+function handleGamepadInput(type, colIndex, gamepadIndex, perfTime) {
+    if (!gameState.isPlaying || gameState.isPaused) return;
+    if (gameState.isAutoplay || gameState.isReplay) return;
+
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+
+    // Sub-frame timing: use perfTime captured at ~1kHz poll for precise song time
+    let currentTime;
+    if (perfTime && AudioEngine.performanceTimeToSongTime) {
+        currentTime = AudioEngine.performanceTimeToSongTime(perfTime, rate);
+    } else {
+        currentTime = AudioEngine.getCurrentTime(rate);
+    }
+
+    // Record to replay log and input buffer
+    if (!gameState.failed && !gameState.isPaused) {
+        gameState.replayLog.push({
+            t: parseFloat(currentTime.toFixed(3)),
+            c: colIndex,
+            e: type === 'down' ? 1 : 0,
+            source: 'gamepad'
+        });
+    }
+
+    recordInput(colIndex, type, currentTime, perfTime || performance.now());
+
+    // Process the input
+    processInput(colIndex, type, currentTime, rate);
+}
+
+/**
+ * Record input to circular buffer for high-precision tracking
+ * Allows post-hoc timing correction if frame drops occur
+ */
+function recordInput(col, type, gameTime, eventTimestamp) {
+    inputBuffer[inputBufferIndex] = {
+        col: col,
+        type: type,
+        gameTime: gameTime,
+        eventTime: eventTimestamp || performance.now(),
+        frame: gameState.globalFrame || 0
+    };
+    inputBufferIndex = (inputBufferIndex + 1) % INPUT_BUFFER_SIZE;
+}
 
 function processInput(colIndex, type, currentTime, rate) {
     if (type === 'down') {
@@ -6001,68 +6141,60 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
 function startEngine() {
     setupCanvas();
 
-    // --- AUDIO OPTIMIZATION: Low latency context for competitive play ---
-    if (!audioCtx) {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContext({
-            latencyHint: 'interactive', // Prioritize low latency over power saving
-            sampleRate: 48000 // Match common hardware to avoid resampling
-        });
-    }
+    // --- AUDIO ENGINE: Single engine, two paths (vinyl / stretch) ---
+    audioCtx = AudioEngine.init();
 
     const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
     const useVinyl = (typeof modConfig !== 'undefined' && modConfig.pitchShift !== undefined) ? modConfig.pitchShift : true;
 
-    // cleanup previous
-    // cleanup previous
-    if (audioSource) { try { audioSource.stop(); } catch (e) { } audioSource = null; }
-    if (gameState.audioEl) { gameState.audioEl.pause(); gameState.audioEl = null; }
-    if (gameState.startTimeout) { clearTimeout(gameState.startTimeout); gameState.startTimeout = null; }
+    AudioEngine.startPlayback(audioBuffer, {
+        rate: rate,
+        pitchShift: useVinyl,
+        audioUrl: gameState.audioUrl,
+        countdown: 3.0
+    });
 
-    if (useVinyl) {
-        // --- VINYL MODE (Buffer Source) ---
-        audioSource = audioCtx.createBufferSource();
-        audioSource.buffer = audioBuffer;
-        audioSource.playbackRate.value = rate;
-        audioSource.onended = () => {
-            if (gameState.isPlaying && !gameState.isPaused && !gameState.failed) {
-                // Determine finish
-            }
-        };
-        audioSource.connect(audioCtx.destination);
-        const startTime = audioCtx.currentTime + 3.0; // 3.0s delay
-        audioSource.start(startTime);
-        gameState.startTime = startTime;
-        gameState.mode = 'vinyl';
-    } else {
-        // --- TIME STRETCH MODE (Audio Element) ---
-        // Note: Chrome/Firefox use high-quality time stretching by default when preservesPitch is true (default).
-        if (!gameState.audioUrl) {
-            console.error("Audio URL missing for Time Stretch mode. Fallback to Vinyl.");
-            modConfig.pitchShift = true; // force vinyl
-            return startEngine();
-        }
-        gameState.audioEl = new Audio(gameState.audioUrl);
-        gameState.audioEl.playbackRate = rate;
-        gameState.audioEl.preservesPitch = true; // Specific property, usually default true
-
-        const START_DELAY_MS = 3000;
-        gameState.startTime = Date.now() + START_DELAY_MS;
-
-        // Schedule play
-        gameState.startTimeout = setTimeout(() => {
-            gameState.audioEl.play().catch(e => console.error("Audio Play Error:", e));
-            gameState.startTimeout = null;
-        }, START_DELAY_MS);
-
-        gameState.mode = 'stretch';
-    }
+    // Sync legacy globals from AudioEngine state
+    audioSource = AudioEngine.source;
+    gameState.audioEl = AudioEngine.audioEl;
+    gameState.startTime = AudioEngine.startTime;
+    gameState.mode = AudioEngine.mode;
 
     gameState.isPlaying = true;
     gameState.isPaused = false;
     gameState.failed = false;
     gameState.life = 50;
     gameState.combo = 0;
+
+    // FIX: Reset rotation lock for new game so correct mode is determined
+    gameState._rotationModeLocked = false;
+    gameState._useSpriteRotations = null;
+
+    // --- INPUT ENGINE: Init with ~1kHz gamepad polling, keyboard handled by handleInput ---
+    if (typeof InputEngine !== 'undefined') {
+        InputEngine.setKeyMap(userConfig.keys);
+        if (!InputEngine._gamepadPollActive) {
+            InputEngine.init({ keys: userConfig.keys, skipKeyboard: true });
+        }
+        InputEngine.enabled = true;
+
+        // Route InputEngine gamepad events into existing game input pipeline
+        InputEngine.onInput = function (evt) {
+            if (evt.source === 'gamepad') {
+                handleGamepadInput(evt.type, evt.col, 0, evt.perfTime);
+            }
+        };
+
+        // Disable GamepadManager polling to avoid double events —
+        // InputEngine's ~1kHz MessageChannel poll replaces rAF-based polling
+        if (typeof GamepadManager !== 'undefined' && GamepadManager.enabled) {
+            GamepadManager.enabled = false;
+            if (GamepadManager.pollId) {
+                cancelAnimationFrame(GamepadManager.pollId);
+                GamepadManager.pollId = null;
+            }
+        }
+    }
 
     // Reset HUD Elements
     const jEl = document.getElementById('judgment');
@@ -6509,7 +6641,8 @@ async function handleZipImport(e) {
    ========================================= */
 function getCurrentBPM() {
     if (!gameState || !gameState.bpmTimes) return 120;
-    const now = audioCtx ? (audioCtx.currentTime - gameState.startTime) : 0;
+    const rate = (typeof modConfig !== 'undefined' && modConfig.rate) ? modConfig.rate : 1.0;
+    let now = AudioEngine.getCurrentTime(rate);
 
     // Find last BPM change before now
     for (let i = gameState.bpmTimes.length - 1; i >= 0; i--) {
@@ -7151,10 +7284,10 @@ async function startChartPreview() {
     // Load Assets Lazy
     if (!previewAssets.arrow) {
         previewAssets.arrow = new Image();
-        previewAssets.arrow.src = "_Down Tap Note 1x8.png";
+        previewAssets.arrow.src = NOTESKIN_PATH + "_Down Tap Note 1x8.png";
         previewAssets.holdHead = previewAssets.arrow;
         previewAssets.holdBody = new Image();
-        previewAssets.holdBody.src = "Down Hold Body Active.png";
+        previewAssets.holdBody.src = NOTESKIN_PATH + "Down Hold Body Active.png";
     }
 
     // Setup Stats
