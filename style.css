@@ -4100,7 +4100,7 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 
 /* =========================================
-   PROFILE PANEL STYLES
+   PROFILE PANEL STYLES (Compact Layout)
    ========================================= */
 
 .profile-panel {
@@ -4108,6 +4108,7 @@ input[type=range]::-webkit-slider-runnable-track {
     border: 1px solid #444;
     border-radius: 16px;
     color: #e0e0e0;
+    pointer-events: auto;
 }
 
 .profile-name-display {
@@ -4121,184 +4122,160 @@ input[type=range]::-webkit-slider-runnable-track {
     padding: 20px;
 }
 
-/* Overall Rating Section */
-.profile-overall-section {
-    text-align: center;
-    padding: 20px;
-    background: linear-gradient(135deg, rgba(255,204,0,0.1) 0%, rgba(0,0,0,0.2) 100%);
-    border-radius: 12px;
-    margin-bottom: 25px;
-    border: 1px solid rgba(255,204,0,0.2);
-}
-
-.profile-overall-rating {
-    font-size: 4rem;
-    font-weight: bold;
-    color: #ffcc00;
-    text-shadow: 0 0 20px rgba(255,204,0,0.5);
-    line-height: 1;
-}
-
-.profile-overall-label {
-    font-size: 1rem;
-    color: #888;
-    margin-top: 5px;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-}
-
-.profile-stats-row {
-    display: flex;
-    justify-content: center;
-    gap: 40px;
-    margin-top: 20px;
-    flex-wrap: wrap;
-}
-
-.profile-stat {
-    text-align: center;
-}
-
-.profile-stat .stat-val {
-    display: block;
-    font-size: 1.5rem;
-    color: #fff;
-    font-weight: bold;
-}
-
-.profile-stat .stat-label {
-    display: block;
-    font-size: 0.8rem;
-    color: #888;
-    text-transform: uppercase;
-}
-
-/* Skillsets Section */
-.profile-skillsets-section {
-    margin-bottom: 25px;
-}
-
-.profile-skillsets-section h3 {
-    margin: 0 0 15px 0;
-    font-size: 1.1rem;
-    color: #66ccff;
-    border-bottom: 1px solid #333;
-    padding-bottom: 10px;
-}
-
-.profile-skillset-grid {
+/* Main Two-Column Layout */
+.profile-main-layout {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
+    grid-template-columns: 320px 1fr;
+    gap: 20px;
+    margin-bottom: 20px;
 }
 
-.profile-skillset-card {
-    background: rgba(0,0,0,0.3);
-    border: 1px solid #333;
-    border-radius: 10px;
-    padding: 15px;
+/* Left Column */
+.profile-left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* Overall Rating (Compact) */
+.profile-overall-compact {
     text-align: center;
-    transition: all 0.2s;
+    padding: 15px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    border: 1px solid #333;
 }
 
-.profile-skillset-card:hover {
-    border-color: #555;
-    transform: translateY(-2px);
-}
-
-.profile-skillset-card .skill-name {
-    font-size: 0.9rem;
-    color: #aaa;
+.profile-overall-compact .overall-label {
+    font-size: 0.75rem;
+    color: #888;
     text-transform: uppercase;
+    letter-spacing: 1px;
     margin-bottom: 5px;
 }
 
-.profile-skillset-card .skill-rating {
-    font-size: 1.8rem;
+.profile-overall-compact .overall-value {
+    font-size: 2.5rem;
     font-weight: bold;
-    color: #66ccff;
+    color: #ffcc00;
+    text-shadow: 0 0 10px rgba(255,204,0,0.4);
+    line-height: 1;
 }
 
-.profile-skillset-card .skill-desc {
-    font-size: 0.75rem;
+.profile-overall-compact .overall-stats {
+    font-size: 0.8rem;
     color: #666;
-    margin-top: 3px;
+    margin-top: 8px;
 }
 
-/* Skillset color coding based on rating */
-.profile-skillset-card[data-skill="stream"] .skill-rating { color: #ff6666; }
-.profile-skillset-card[data-skill="jumpstream"] .skill-rating { color: #ffaa44; }
-.profile-skillset-card[data-skill="handstream"] .skill-rating { color: #ffdd44; }
-.profile-skillset-card[data-skill="chordjack"] .skill-rating { color: #66ff66; }
-.profile-skillset-card[data-skill="technical"] .skill-rating { color: #66ccff; }
-.profile-skillset-card[data-skill="jackSpeed"] .skill-rating { color: #cc66ff; }
-.profile-skillset-card[data-skill="stamina"] .skill-rating { color: #ff66aa; }
-
-/* Judgments Section */
-.profile-judgments-section {
-    margin-bottom: 25px;
+/* Skillset List (Compact) */
+.profile-skillset-list {
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    padding: 10px;
+    border: 1px solid #333;
 }
 
-.profile-judgments-section h3 {
-    margin: 0 0 15px 0;
+.skillset-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.skillset-row:last-child {
+    border-bottom: none;
+}
+
+.skillset-row:hover {
+    background: rgba(255,255,255,0.03);
+    border-radius: 4px;
+}
+
+.skillset-name {
+    font-size: 0.85rem;
+    color: #aaa;
+}
+
+.skillset-rating {
     font-size: 1.1rem;
-    color: #66ccff;
-    border-bottom: 1px solid #333;
-    padding-bottom: 10px;
+    font-weight: bold;
+    font-family: 'Mochiy Pop One', sans-serif;
 }
 
-.profile-judgment-grid {
+/* Judgments (Compact) */
+.profile-judgments-compact {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 10px;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
 }
 
-.profile-judge-item {
+.judge-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 15px;
-    background: rgba(0,0,0,0.3);
-    border-radius: 8px;
-    border-left: 3px solid;
+    gap: 6px;
+    padding: 5px 8px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 6px;
+    font-size: 0.75rem;
 }
 
-.profile-judge-item.judge-marvelous { border-left-color: #66ccff; }
-.profile-judge-item.judge-perfect { border-left-color: #ffcc00; }
-.profile-judge-item.judge-great { border-left-color: #66cc66; }
-.profile-judge-item.judge-good { border-left-color: #ffaa44; }
-.profile-judge-item.judge-bad { border-left-color: #ff6666; }
-.profile-judge-item.judge-miss { border-left-color: #e61e25; }
+.judge-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
 
-.profile-judge-item .judge-name {
-    font-size: 0.8rem;
+.judge-dot.judge-marvelous { background: #66ccff; }
+.judge-dot.judge-perfect { background: #ffcc00; }
+.judge-dot.judge-great { background: #66cc66; }
+.judge-dot.judge-good { background: #ffaa44; }
+.judge-dot.judge-bad { background: #ff6666; }
+.judge-dot.judge-miss { background: #e61e25; }
+
+.judge-row .judge-name {
     color: #888;
-    text-transform: uppercase;
-    flex: 1;
+    flex-shrink: 0;
 }
 
-.profile-judge-item .judge-val {
-    font-size: 1.1rem;
-    font-weight: bold;
+.judge-row .judge-val {
     color: #fff;
+    font-weight: bold;
+    margin-left: auto;
+    font-family: monospace;
 }
 
-.profile-judge-item .judge-pct {
-    font-size: 0.8rem;
+.judge-row .judge-pct {
     color: #666;
+    font-size: 0.7rem;
 }
 
-/* Top Scores Section */
-.profile-top-scores-section {
-    margin-bottom: 25px;
+/* Right Column - Top Scores */
+.profile-right-col {
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    border: 1px solid #333;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
 }
 
-.profile-top-scores-section h3 {
-    margin: 0 0 15px 0;
-    font-size: 1.1rem;
+.profile-right-col h3 {
+    margin: 0 0 12px 0;
+    font-size: 1rem;
     color: #66ccff;
     border-bottom: 1px solid #333;
-    padding-bottom: 10px;
+    padding-bottom: 8px;
+}
+
+/* Old styles kept for compatibility - will be removed */
+.profile-overall-section,
+.profile-skillsets-section,
+.profile-judgments-section,
+.profile-top-scores-section {
+    display: none;
 }
 
 .profile-scores-list {
@@ -4391,4 +4368,126 @@ input[type=range]::-webkit-slider-runnable-track {
 .ss-profile-btn:hover {
     background: linear-gradient(135deg, #4a4a4a 0%, #3a3a3a 100%);
     border-color: #ffcc00;
+}
+
+/* Online Status Section in Profile Header */
+.profile-online-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    margin-right: 20px;
+}
+
+.online-status {
+    font-size: 0.9rem;
+    color: #888;
+    padding: 5px 10px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 5px;
+    border: 1px solid #444;
+}
+
+.online-status.online {
+    color: #66ff66;
+    border-color: #44aa44;
+    background: rgba(68, 170, 68, 0.2);
+}
+
+/* Online Login Modal */
+#online-login-modal .modal-content {
+    background: rgba(18, 18, 18, 0.98);
+    border: 1px solid #444;
+    border-radius: 16px;
+    max-width: 400px;
+}
+
+.login-form {
+    padding: 20px;
+}
+
+.login-form form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.login-form label {
+    color: #aaa;
+    font-size: 0.9rem;
+}
+
+.login-form input {
+    padding: 10px;
+    border: 1px solid #555;
+    border-radius: 5px;
+    background: rgba(0,0,0,0.3);
+    color: #fff;
+    font-size: 1rem;
+}
+
+.login-form input:focus {
+    outline: none;
+    border-color: #ffcc00;
+}
+
+.login-form button[type="submit"],
+.login-form button[type="button"] {
+    padding: 12px 20px;
+    border: 1px solid #555;
+    border-radius: 5px;
+    background: linear-gradient(135deg, #3a3a3a 0%, #2a2a2a 100%);
+    color: #fff;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.2s;
+}
+
+.login-form button[type="submit"] {
+    background: linear-gradient(135deg, #2a5a2a 0%, #1a4a1a 100%);
+    border-color: #44aa44;
+}
+
+.login-form button[type="submit"]:hover {
+    background: linear-gradient(135deg, #3a7a3a 0%, #2a6a2a 100%);
+}
+
+.login-form button[type="button"] {
+    background: linear-gradient(135deg, #3a3a5a 0%, #2a2a4a 100%);
+    border-color: #4444aa;
+}
+
+.login-form button[type="button"]:hover {
+    background: linear-gradient(135deg, #4a4a7a 0%, #3a3a6a 100%);
+}
+
+/* Online Username Display in Profile */
+.online-username-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    color: #aaa;
+}
+
+#profile-online-username-label {
+    color: #888;
+}
+
+#profile-online-username {
+    color: #ffcc00;
+    font-weight: bold;
+}
+
+.small-btn {
+    padding: 2px 8px !important;
+    font-size: 0.75rem !important;
+    min-width: auto !important;
+}
+
+#login-error {
+    color: #ff5555;
+    font-size: 0.9rem;
+    margin-top: 10px;
+    text-align: center;
 }

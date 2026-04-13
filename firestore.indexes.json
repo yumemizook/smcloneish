@@ -1,0 +1,32 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "scores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "songKey", "order": "ASCENDING" },
+        { "fieldPath": "rate", "order": "ASCENDING" },
+        { "fieldPath": "judge", "order": "ASCENDING" },
+        { "fieldPath": "wifePercent", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "submittedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "valid", "order": "ASCENDING" },
+        { "fieldPath": "ssr", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
