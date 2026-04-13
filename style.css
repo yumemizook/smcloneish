@@ -4098,3 +4098,297 @@ input[type=range]::-webkit-slider-runnable-track {
     border-style: solid;
     border-color: #00e5ff transparent transparent transparent;
 }
+
+/* =========================================
+   PROFILE PANEL STYLES
+   ========================================= */
+
+.profile-panel {
+    background: rgba(18, 18, 18, 0.98);
+    border: 1px solid #444;
+    border-radius: 16px;
+    color: #e0e0e0;
+}
+
+.profile-name-display {
+    font-size: 1.2rem;
+    color: #ffcc00;
+    margin-left: auto;
+    margin-right: 20px;
+}
+
+.profile-content {
+    padding: 20px;
+}
+
+/* Overall Rating Section */
+.profile-overall-section {
+    text-align: center;
+    padding: 20px;
+    background: linear-gradient(135deg, rgba(255,204,0,0.1) 0%, rgba(0,0,0,0.2) 100%);
+    border-radius: 12px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255,204,0,0.2);
+}
+
+.profile-overall-rating {
+    font-size: 4rem;
+    font-weight: bold;
+    color: #ffcc00;
+    text-shadow: 0 0 20px rgba(255,204,0,0.5);
+    line-height: 1;
+}
+
+.profile-overall-label {
+    font-size: 1rem;
+    color: #888;
+    margin-top: 5px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.profile-stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+.profile-stat {
+    text-align: center;
+}
+
+.profile-stat .stat-val {
+    display: block;
+    font-size: 1.5rem;
+    color: #fff;
+    font-weight: bold;
+}
+
+.profile-stat .stat-label {
+    display: block;
+    font-size: 0.8rem;
+    color: #888;
+    text-transform: uppercase;
+}
+
+/* Skillsets Section */
+.profile-skillsets-section {
+    margin-bottom: 25px;
+}
+
+.profile-skillsets-section h3 {
+    margin: 0 0 15px 0;
+    font-size: 1.1rem;
+    color: #66ccff;
+    border-bottom: 1px solid #333;
+    padding-bottom: 10px;
+}
+
+.profile-skillset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+}
+
+.profile-skillset-card {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+    transition: all 0.2s;
+}
+
+.profile-skillset-card:hover {
+    border-color: #555;
+    transform: translateY(-2px);
+}
+
+.profile-skillset-card .skill-name {
+    font-size: 0.9rem;
+    color: #aaa;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+}
+
+.profile-skillset-card .skill-rating {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #66ccff;
+}
+
+.profile-skillset-card .skill-desc {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 3px;
+}
+
+/* Skillset color coding based on rating */
+.profile-skillset-card[data-skill="stream"] .skill-rating { color: #ff6666; }
+.profile-skillset-card[data-skill="jumpstream"] .skill-rating { color: #ffaa44; }
+.profile-skillset-card[data-skill="handstream"] .skill-rating { color: #ffdd44; }
+.profile-skillset-card[data-skill="chordjack"] .skill-rating { color: #66ff66; }
+.profile-skillset-card[data-skill="technical"] .skill-rating { color: #66ccff; }
+.profile-skillset-card[data-skill="jackSpeed"] .skill-rating { color: #cc66ff; }
+.profile-skillset-card[data-skill="stamina"] .skill-rating { color: #ff66aa; }
+
+/* Judgments Section */
+.profile-judgments-section {
+    margin-bottom: 25px;
+}
+
+.profile-judgments-section h3 {
+    margin: 0 0 15px 0;
+    font-size: 1.1rem;
+    color: #66ccff;
+    border-bottom: 1px solid #333;
+    padding-bottom: 10px;
+}
+
+.profile-judgment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.profile-judge-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 15px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    border-left: 3px solid;
+}
+
+.profile-judge-item.judge-marvelous { border-left-color: #66ccff; }
+.profile-judge-item.judge-perfect { border-left-color: #ffcc00; }
+.profile-judge-item.judge-great { border-left-color: #66cc66; }
+.profile-judge-item.judge-good { border-left-color: #ffaa44; }
+.profile-judge-item.judge-bad { border-left-color: #ff6666; }
+.profile-judge-item.judge-miss { border-left-color: #e61e25; }
+
+.profile-judge-item .judge-name {
+    font-size: 0.8rem;
+    color: #888;
+    text-transform: uppercase;
+    flex: 1;
+}
+
+.profile-judge-item .judge-val {
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #fff;
+}
+
+.profile-judge-item .judge-pct {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Top Scores Section */
+.profile-top-scores-section {
+    margin-bottom: 25px;
+}
+
+.profile-top-scores-section h3 {
+    margin: 0 0 15px 0;
+    font-size: 1.1rem;
+    color: #66ccff;
+    border-bottom: 1px solid #333;
+    padding-bottom: 10px;
+}
+
+.profile-scores-list {
+    max-height: 250px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.2);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.profile-score-item {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 10px;
+    border-bottom: 1px solid #333;
+    transition: background 0.2s;
+}
+
+.profile-score-item:hover {
+    background: rgba(255,255,255,0.05);
+}
+
+.profile-score-item:last-child {
+    border-bottom: none;
+}
+
+.profile-score-rank {
+    font-size: 0.9rem;
+    color: #888;
+    min-width: 30px;
+}
+
+.profile-score-song {
+    flex: 1;
+}
+
+.profile-score-song .song-title {
+    font-size: 0.95rem;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.profile-score-song .song-diff {
+    font-size: 0.75rem;
+    color: #888;
+}
+
+.profile-score-acc {
+    font-size: 1rem;
+    color: #ffcc00;
+    font-weight: bold;
+}
+
+.profile-score-ssr {
+    font-size: 1rem;
+    color: #66ccff;
+    font-weight: bold;
+    min-width: 60px;
+    text-align: right;
+}
+
+.profile-score-date {
+    font-size: 0.75rem;
+    color: #666;
+    min-width: 80px;
+    text-align: right;
+}
+
+/* Profile Actions */
+.profile-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding-top: 15px;
+    border-top: 1px solid #333;
+}
+
+/* Profile Button in Song Select */
+.ss-profile-btn {
+    background: linear-gradient(135deg, #3a3a3a 0%, #2a2a2a 100%);
+    border: 1px solid #555;
+    min-width: 50px;
+    font-size: 1.2rem;
+}
+
+.ss-profile-btn:hover {
+    background: linear-gradient(135deg, #4a4a4a 0%, #3a3a3a 100%);
+    border-color: #ffcc00;
+}

@@ -7,13 +7,12 @@
     <title>Donguri🟊Web Etterna clone</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.2/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.2.6/dist/pixi.min.js"></script>
 
     <script src="engine/audio-engine.js"></script>
     <script src="engine/input-engine.js"></script>
     <script src="engine/renderer.js"></script>
     <script src="engine/game-loop.js"></script>
-    <script src="gamepad.js"></script>
     <script src="difficulty/CalcConstants.js"></script>
     <script src="difficulty/CalcWindow.js"></script>
     <script src="difficulty/AnchorSequencing.js"></script>
@@ -26,6 +25,7 @@
     <script src="difficulty/MSD.js"></script>
     <script src="difficulty/SSR.js"></script>
     <script src="difficulty.js"></script>
+    <script src="profile.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -60,6 +60,7 @@
                     <div class="ss-left-footer">
                         <label for="file-input" class="ss-btn ss-upload-btn"><span>📂 Import Folder</span></label>
                         <label for="zip-input" class="ss-btn ss-zip-btn"><span>📦 Import Zip</span></label>
+                        <button class="ss-btn ss-profile-btn" onclick="openProfile()">👤</button>
                         <button class="ss-btn ss-settings-btn" onclick="openSettings()">⚙️</button>
                         <input type="file" id="file-input" webkitdirectory directory multiple style="display:none;">
                         <input type="file" id="zip-input" accept=".zip" style="display:none;">
@@ -811,6 +812,24 @@
                                                 data-val="7">7</button>
                                         </div>
                                     </div>
+
+                                    <div
+                                        style="background:rgba(0,0,0,0.3); padding:20px; border-radius:10px; height: 100%;">
+                                        <label
+                                            style="display:block; margin-bottom:15px; color:#fff; font-size: 1.1em; font-weight: bold;">Render
+                                            Quality</label>
+                                        <div class="mod-toggles wrap" id="set-render-quality-group"
+                                            style="justify-content:center; gap: 10px;">
+                                            <button class="mod-toggle-btn" onclick="setRenderQuality('auto')"
+                                                data-val="auto">Auto</button>
+                                            <button class="mod-toggle-btn" onclick="setRenderQuality('performance')"
+                                                data-val="performance">Performance</button>
+                                            <button class="mod-toggle-btn" onclick="setRenderQuality('balanced')"
+                                                data-val="balanced">Balanced</button>
+                                            <button class="mod-toggle-btn" onclick="setRenderQuality('high')"
+                                                data-val="high">High</button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -924,6 +943,138 @@
                 </div>
                 <div class="settings-footer">
                     <button class="close-btn" onclick="saveSettings()">Save & Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Profile Modal -->
+        <div id="profile-modal" class="modal-overlay" style="display:none;">
+            <div class="modal-content profile-panel" style="width: 85%; max-height: 90vh; overflow-y: auto;">
+                <div class="mod-header-row">
+                    <h2>Player Profile</h2>
+                    <div class="profile-name-display" id="profile-name-display">Player</div>
+                    <button class="close-btn" onclick="closeProfile()">Close</button>
+                </div>
+
+                <div class="profile-content">
+                    <!-- Top: Overall Rating -->
+                    <div class="profile-overall-section">
+                        <div class="profile-overall-rating" id="profile-overall-rating">0.00</div>
+                        <div class="profile-overall-label">Overall Rating</div>
+                        <div class="profile-stats-row">
+                            <div class="profile-stat">
+                                <span class="stat-val" id="profile-total-plays">0</span>
+                                <span class="stat-label">Plays</span>
+                            </div>
+                            <div class="profile-stat">
+                                <span class="stat-val" id="profile-play-time">0h 0m</span>
+                                <span class="stat-label">Play Time</span>
+                            </div>
+                            <div class="profile-stat">
+                                <span class="stat-val" id="profile-avg-acc">0.00%</span>
+                                <span class="stat-label">Avg Accuracy</span>
+                            </div>
+                            <div class="profile-stat">
+                                <span class="stat-val" id="profile-best-acc">0.00%</span>
+                                <span class="stat-label">Best Acc</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Skillset Ratings Grid -->
+                    <div class="profile-skillsets-section">
+                        <h3>Skill Set Ratings</h3>
+                        <div class="profile-skillset-grid">
+                            <div class="profile-skillset-card" data-skill="stream">
+                                <div class="skill-name">Stream</div>
+                                <div class="skill-rating" id="skill-stream">0.00</div>
+                                <div class="skill-desc">Continuous patterns</div>
+                            </div>
+                            <div class="profile-skillset-card" data-skill="jumpstream">
+                                <div class="skill-name">Jumpstream</div>
+                                <div class="skill-rating" id="skill-jumpstream">0.00</div>
+                                <div class="skill-desc">Jumps & singles</div>
+                            </div>
+                            <div class="profile-skillset-card" data-skill="handstream">
+                                <div class="skill-name">Handstream</div>
+                                <div class="skill-rating" id="skill-handstream">0.00</div>
+                                <div class="skill-desc">Chord patterns</div>
+                            </div>
+                            <div class="profile-skillset-card" data-skill="chordjack">
+                                <div class="skill-name">Chordjack</div>
+                                <div class="skill-rating" id="skill-chordjack">0.00</div>
+                                <div class="skill-desc">Chord jacks</div>
+                            </div>
+                            <div class="profile-skillset-card" data-skill="technical">
+                                <div class="skill-name">Technical</div>
+                                <div class="skill-rating" id="skill-technical">0.00</div>
+                                <div class="skill-desc">Complex patterns</div>
+                            </div>
+                            <div class="profile-skillset-card" data-skill="jackSpeed">
+                                <div class="skill-name">Jack Speed</div>
+                                <div class="skill-rating" id="skill-jackSpeed">0.00</div>
+                                <div class="skill-desc">Fast jacks</div>
+                            </div>
+                            <div class="profile-skillset-card" data-skill="stamina">
+                                <div class="skill-name">Stamina</div>
+                                <div class="skill-rating" id="skill-stamina">0.00</div>
+                                <div class="skill-desc">Endurance</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Judgment Stats -->
+                    <div class="profile-judgments-section">
+                        <h3>Lifetime Judgments</h3>
+                        <div class="profile-judgment-grid">
+                            <div class="profile-judge-item judge-marvelous">
+                                <span class="judge-name">Marvelous</span>
+                                <span class="judge-val" id="profile-marv-count">0</span>
+                                <span class="judge-pct" id="profile-marv-pct">0%</span>
+                            </div>
+                            <div class="profile-judge-item judge-perfect">
+                                <span class="judge-name">Perfect</span>
+                                <span class="judge-val" id="profile-perf-count">0</span>
+                                <span class="judge-pct" id="profile-perf-pct">0%</span>
+                            </div>
+                            <div class="profile-judge-item judge-great">
+                                <span class="judge-name">Great</span>
+                                <span class="judge-val" id="profile-great-count">0</span>
+                                <span class="judge-pct" id="profile-great-pct">0%</span>
+                            </div>
+                            <div class="profile-judge-item judge-good">
+                                <span class="judge-name">Good</span>
+                                <span class="judge-val" id="profile-good-count">0</span>
+                                <span class="judge-pct" id="profile-good-pct">0%</span>
+                            </div>
+                            <div class="profile-judge-item judge-bad">
+                                <span class="judge-name">Bad</span>
+                                <span class="judge-val" id="profile-bad-count">0</span>
+                                <span class="judge-pct" id="profile-bad-pct">0%</span>
+                            </div>
+                            <div class="profile-judge-item judge-miss">
+                                <span class="judge-name">Miss</span>
+                                <span class="judge-val" id="profile-miss-count">0</span>
+                                <span class="judge-pct" id="profile-miss-pct">0%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Top Scores -->
+                    <div class="profile-top-scores-section">
+                        <h3>Top Scores (by SSR)</h3>
+                        <div class="profile-scores-list" id="profile-top-scores">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Profile Actions -->
+                    <div class="profile-actions">
+                        <button class="mod-toggle-btn" onclick="renameProfilePrompt()">Rename Profile</button>
+                        <button class="mod-toggle-btn" onclick="exportProfileData()">Export Data</button>
+                        <button class="mod-toggle-btn" onclick="importProfilePrompt()">Import Data</button>
+                        <button class="mod-toggle-btn" style="border-color:#ff5555; color:#ff5555;" onclick="resetProfilePrompt()">Reset Profile</button>
+                    </div>
                 </div>
             </div>
         </div>

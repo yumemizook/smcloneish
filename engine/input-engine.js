@@ -22,6 +22,7 @@
         // --- Config ---
         keyMap: ['d', 'f', 'j', 'k'],  // key → column index
         enabled: true,
+        _initialized: false,
 
         // --- Event queue (lock-free ring buffer) ---
         _queue: new Array(QUEUE_SIZE),
@@ -34,6 +35,7 @@
         // --- Gamepad ---
         _gamepadPollChannel: null,  // MessageChannel for ~1kHz polling
         _gamepadPollActive: false,
+        _visibilityPaused: false,
         _prevGamepadState: new Map(),
         _gamepadButtonMap: { 12: 0, 13: 1, 14: 2, 15: 3 },
         _gamepadAltMap: { 0: 0, 1: 1, 2: 2, 3: 3 },
@@ -58,6 +60,11 @@
          *        (use when game.js handleInput already manages keyboard + UI state)
          */
         init: function (config) {
+            if (this._initialized) {
+                if (config && config.keys) this.keyMap = config.keys;
+                return;
+            }
+
             if (config && config.keys) this.keyMap = config.keys;
 
             if (!config || !config.skipKeyboard) {
@@ -71,8 +78,17 @@
             // Gamepad: use MessageChannel for ~1kHz polling
             this._startGamepadPoll();
 
+            // Pause high-frequency polling when tab is hidden/unfocused
+            this._onVisibilityChange = this._handleVisibilityChange.bind(this);
+            this._onWindowBlur = this._handleWindowBlur.bind(this);
+            this._onWindowFocus = this._handleWindowFocus.bind(this);
+            document.addEventListener('visibilitychange', this._onVisibilityChange, true);
+            window.addEventListener('blur', this._onWindowBlur, true);
+            window.addEventListener('focus', this._onWindowFocus, true);
+
             console.log('[InputEngine] Initialized — keys:', this.keyMap.join(','),
                 config && config.skipKeyboard ? '(keyboard: external)' : '(keyboard: internal)');
+            this._initialized = true;
         },
 
         /** Update the key→column mapping at runtime */
@@ -112,6 +128,8 @@
 
         _startGamepadPoll: function () {
             if (!('getGamepads' in navigator)) return;
+            if (this._gamepadPollActive) return;
+            if (document.hidden || !this.enabled) return;
 
             // MessageChannel trick: port.postMessage schedules a microtask
             // that fires much faster than setTimeout(0) or rAF
@@ -135,6 +153,39 @@
                 this._gamepadPollChannel.port1.close();
                 this._gamepadPollChannel.port2.close();
                 this._gamepadPollChannel = null;
+            }
+        },
+
+        pauseGamepadPolling: function () {
+            this._stopGamepadPoll();
+        },
+
+        resumeGamepadPolling: function () {
+            this._startGamepadPoll();
+        },
+
+        _handleVisibilityChange: function () {
+            if (document.hidden) {
+                this._visibilityPaused = true;
+                this._stopGamepadPoll();
+                return;
+            }
+
+            if (this._visibilityPaused) {
+                this._visibilityPaused = false;
+                if (this.enabled) this._startGamepadPoll();
+            }
+        },
+
+        _handleWindowBlur: function () {
+            this._visibilityPaused = true;
+            this._stopGamepadPoll();
+        },
+
+        _handleWindowFocus: function () {
+            if (!document.hidden && this.enabled) {
+                this._visibilityPaused = false;
+                this._startGamepadPoll();
             }
         },
 
@@ -270,9 +321,13 @@
         destroy: function () {
             window.removeEventListener('keydown', this._onKeyDown, true);
             window.removeEventListener('keyup', this._onKeyUp, true);
+            document.removeEventListener('visibilitychange', this._onVisibilityChange, true);
+            window.removeEventListener('blur', this._onWindowBlur, true);
+            window.removeEventListener('focus', this._onWindowFocus, true);
             this._stopGamepadPoll();
             this._queueHead = 0;
             this._queueTail = 0;
+            this._initialized = false;
             console.log('[InputEngine] Destroyed');
         }
     };

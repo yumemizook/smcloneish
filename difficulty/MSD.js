@@ -87,6 +87,7 @@ function buildIntervals(notes, rate) {
       return Array.from({ length: NUM_SKILLSET }, function() { return new Array(numitv).fill(0); });
     });
   };
+  var mkPm = function() { return [new Array(numitv).fill(1), new Array(numitv).fill(1)]; };
 
   var metaItvInfoArr = BOTH_HANDS.map(function() {
     return Array.from({ length: numitv }, function() { return initializeMetaItvInfo(); });
@@ -113,9 +114,25 @@ function buildIntervals(notes, rate) {
     musicRate: rate,
     seqFlamJam: new Array(numitv).fill(1),
     seqTheThing: new Array(numitv).fill(1),
+    seqTheThing2: new Array(numitv).fill(1),
     seqVOHT: new Array(numitv).fill(1),
     itvTotalTaps: new Array(numitv).fill(0),
     itvJumpTaps: new Array(numitv).fill(0),
+    depOHT: mkPm(),
+    depOHJ: mkPm(),
+    depMinijack: mkPm(),
+    depBalance: mkPm(),
+    depChaos: mkPm(),
+    depWRBalance: mkPm(),
+    depWRAnchor: mkPm(),
+    depWRRoll: mkPm(),
+    depWRJT: mkPm(),
+    depWRJJ: mkPm(),
+    depStream: mkPm(),
+    depJS: mkPm(),
+    depHS: mkPm(),
+    depCJ: mkPm(),
+    depCJDensity: mkPm(),
     metaItvInfo: metaItvInfoArr,
     itvHandInfo: itvHandInfoArr,
   };
@@ -171,7 +188,7 @@ function computeBaseDiffs(calc) {
         msdiff = weightedAverage(msdiff, estimates[ei], MS_BASE_FINGER_W, MS_BASE_FINGER_W2);
       }
 
-      var nps = notes * FINALSCALER * 1.6;
+      var nps = notes * FINALSCALER * 1.83;
       var msbase = FINALSCALER * msdiff;
 
       calc.initBaseDiffNPS[hand][itv] = nps;
@@ -300,6 +317,8 @@ function computeCJAndTechBase(calc) {
       var lastRowCount = 0, lastLastRowCount = 0;
       var chain = 1;
       var msVals = [];
+      var chordBonk = [];
+      var MEDITERRANEAN = 10;
 
       for (var ri = 0; ri < calc.adjNi[itv].length; ri++) {
         var row = calc.adjNi[itv][ri];
@@ -307,27 +326,22 @@ function computeCJAndTechBase(calc) {
         var pc = popcount(handNotes);
         if (pc === 0) continue;
 
-        var isCJ = lastRowCount > 1 && pc > 1;
-        var wasCJ = lastRowCount > 1 && lastLastRowCount > 1;
         var isContinuingJack = (handNotes & lastRowNotes) !== 0;
-        var is3NoteAnchor = ((handNotes & lastRowNotes) & lastLastRowNotes) !== 0;
 
         if (isContinuingJack) chain++;
         else chain = 1;
+
+        chordBonk.push(handNotes === lastRowNotes ? 1 : 0);
+        if (chordBonk.length > MEDITERRANEAN) chordBonk.shift();
 
         if (lastChordTime > -4.0) {
           var ms = msFrom(row.rowTime, lastChordTime);
           var pewpew = 1.2;
           if (chain < 3) pewpew *= 1.1;
           if (chain === 3) pewpew /= 1.1;
-          if (is3NoteAnchor) pewpew *= 0.95;
-          else if (isContinuingJack) {
-            if (wasCJ) pewpew *= 1.25;
-            else pewpew *= 1.5;
-          } else if (isCJ) {
-            if (wasCJ) pewpew *= 1.15;
-            else pewpew *= 1.25;
-          }
+          var laguardiaairport = 0;
+          for (var bi = 0; bi < chordBonk.length; bi++) laguardiaairport += chordBonk[bi];
+          pewpew *= Math.pow(1.025, laguardiaairport);
           ms = Math.max(CJ_MIN_MS, ms * pewpew);
           msVals.push(ms);
         }
@@ -357,28 +371,66 @@ function computeCJAndTechBase(calc) {
       }
 
       // Tech base
-      var timingVals = [];
-      var lastTime = -5.0;
+      var anyMsWindow = new CalcMovingWindow();
+      anyMsWindow.fill(5000);
+      var scMsWindows = [new CalcMovingWindow(), new CalcMovingWindow()];
+      scMsWindows[0].fill(5000);
+      scMsWindows[1].fill(5000);
+      var colLastTimes = [-5.0, -5.0];
+      var tcStatic = [];
       for (var ri = 0; ri < calc.adjNi[itv].length; ri++) {
         var row = calc.adjNi[itv][ri];
         var handNotes = row.rowNotes & handMask;
         var pc = popcount(handNotes);
         if (pc === 0) continue;
-        if (lastTime > -4.0) {
-          timingVals.push(msFrom(row.rowTime, lastTime));
+
+        var activeCols = [];
+        for (var c = 0; c < 4; c++) {
+          if (handNotes & (1 << c)) activeCols.push(c);
         }
-        lastTime = row.rowTime;
+
+        var anyMs = 5000;
+        if (ri > 0) {
+          anyMs = msFrom(row.rowTime, calc.adjNi[itv][ri - 1].rowTime);
+        }
+        anyMsWindow.push(anyMs);
+
+        for (var aci = 0; aci < activeCols.length; aci++) {
+          var col = activeCols[aci];
+          var localCol = hand === LEFT_HAND ? col : col - 2;
+          if (localCol < 0 || localCol > 1) continue;
+          var sameMs = colLastTimes[localCol] > -4.0 ? msFrom(row.rowTime, colLastTimes[localCol]) : 5000;
+          colLastTimes[localCol] = row.rowTime;
+          scMsWindows[localCol].push(sameMs);
+
+          var otherLocalCol = localCol === 0 ? 1 : 0;
+          var otherMs;
+          if (activeCols.length > 1) {
+            otherMs = scMsWindows[otherLocalCol].getNow();
+          } else {
+            otherMs = scMsWindows[otherLocalCol].getNow();
+          }
+
+          var c = (sameMs + otherMs) / 2;
+          var pineapple = anyMsWindow.getCvOfWindow(4);
+          var porcupine = scMsWindows[0].getCvOfWindow(4);
+          var sequins = scMsWindows[1].getCvOfWindow(4);
+          var oioi = 0.5;
+          var ioio = 0.5;
+          pineapple = Math.min(Math.max(pineapple + oioi, oioi), ioio + oioi);
+          porcupine = Math.min(Math.max(porcupine + oioi, oioi), ioio + oioi);
+          sequins = Math.min(Math.max(sequins + oioi, oioi), ioio + oioi);
+          var vertebrae = Math.min(Math.max((pineapple + porcupine + sequins) / 3.0, oioi), ioio + oioi);
+          tcStatic.push(c / vertebrae);
+        }
       }
 
-      if (timingVals.length === 0) {
+      if (tcStatic.length === 0) {
         calc.initBaseDiffTech[hand][itv] = calc.initBaseDiffNPS[hand][itv];
       } else {
-        var mean = timingVals.reduce(function(a, b) { return a + b; }, 0) / timingVals.length;
-        var variance = timingVals.reduce(function(a, b) { return a + Math.pow(b - mean, 2); }, 0) / timingVals.length;
-        var cvVal = Math.sqrt(variance) / mean;
-        var clampedCV = Math.max(0.5, Math.min(cvVal + 0.5, 1.5));
+        var mean = tcStatic.reduce(function(a, b) { return a + b; }, 0) / tcStatic.length;
         var npsBase = calc.initBaseDiffNPS[hand][itv];
-        var tcBase = msToScaledNps(mean * clampedCV);
+        var tcBase = msToScaledNps(mean);
         calc.initBaseDiffTech[hand][itv] = weightedAverage(tcBase, npsBase, 4.0, 9.0);
       }
     }
@@ -594,14 +646,6 @@ function calculateMSD(notes, musicRate) {
   var agg = aggregateSkill(ssValues, 0.25, 1.11, 0.0, 10.24);
   var highest = Math.max.apply(null, ssValues);
   ssValues[Skill.Overall] = Math.max(agg, highest);
-
-  var MSD_GLOBAL_NERF = 0.87;
-  for (var ss = 0; ss < NUM_SKILLSET; ss++) {
-    ssValues[ss] *= MSD_GLOBAL_NERF;
-  }
-
-  // Additional 10% reduction to overall MSD
-  ssValues[Skill.Overall] *= 0.90;
 
   var r2 = function(v) { return Math.round(v * 100) / 100; };
   return {

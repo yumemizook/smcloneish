@@ -16,7 +16,8 @@ let userConfig = {
     keyRetry: 'Backquote',
     keyRateUp: '=',
     keyRateDown: '-',
-    globalOffset: 0 // Audio offset in ms
+    globalOffset: 0, // Audio offset in ms
+    renderQuality: 'auto' // auto | performance | balanced | high
 };
 // Expose to window for modifiers.js access assurance
 window.userConfig = userConfig;
@@ -41,8 +42,12 @@ function loadUserConfig() {
             if (!userConfig.keyRateUp) userConfig.keyRateUp = '=';
             if (!userConfig.keyRateDown) userConfig.keyRateDown = '-';
             if (userConfig.globalOffset === undefined) userConfig.globalOffset = 0;
+            if (!['auto', 'performance', 'balanced', 'high'].includes(userConfig.renderQuality)) {
+                userConfig.renderQuality = 'auto';
+            }
         } catch (e) { }
     }
+    window.userConfig = userConfig;
 }
 loadUserConfig();
 
@@ -52,6 +57,24 @@ function saveUserConfig() {
     } catch (e) {
         console.warn("Failed to save user config:", e);
     }
+}
+
+function getTargetRenderResolution(adaptive) {
+    const dpr = window.devicePixelRatio || 1;
+    const profile = userConfig.renderQuality || 'auto';
+
+    if (profile === 'performance') return 1;
+    if (profile === 'balanced') return Math.min(dpr, 1.25);
+    if (profile === 'high') return Math.min(dpr, 2);
+
+    if (adaptive && adaptive.isVeryLowFPS) return 1;
+    if (adaptive && adaptive.isLowFPS) return Math.min(dpr, 1.1);
+    return Math.min(dpr, 1.5);
+}
+
+function applyDynamicRenderResolution(adaptive) {
+    if (!gameplayRenderer || !gameplayRenderer.app || !gameplayRenderer.useWebGL) return;
+    gameplayRenderer.setResolution(getTargetRenderResolution(adaptive));
 }
 
 // Timing Constants (New Base per User Request)
@@ -608,7 +631,7 @@ function setScreen(screenName) {
         return;
     }
 
-    const screens = ['setup-panel', 'game-hud', 'pause-menu', 'results-screen', 'settings-modal', 'settings-screen'];
+    const screens = ['setup-panel', 'game-hud', 'pause-menu', 'results-screen', 'settings-modal', 'settings-screen', 'profile-modal'];
     screens.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
@@ -846,6 +869,9 @@ class GameplayRenderer {
         // Static offscreen canvas for receptor glow/bloom effects
         this.offscreenCanvas = null;
         this.offscreenCtx = null;
+        this.currentResolution = 1;
+        this._initPromise = null;
+        this._containerDiv = null;
     }
 
     /**
@@ -855,6 +881,7 @@ class GameplayRenderer {
      */
     init(fallbackCanvas) {
         this.canvas2d = fallbackCanvas;
+        if (this.app || this._initPromise) return this.useWebGL;
 
         // Check if PixiJS is available
         if (typeof PIXI === 'undefined') {
@@ -877,52 +904,85 @@ class GameplayRenderer {
                 console.warn('[GameplayRenderer] Pixi container not found');
                 return false;
             }
+            this._containerDiv = containerDiv;
 
             // Calculate dimensions from fallback canvas or window
             const height = window.innerHeight;
             const width = height * 0.625;
+            this.currentResolution = getTargetRenderResolution(gameState && gameState._adaptiveQuality);
 
-            this.app = new PIXI.Application({
+            const appOptions = {
                 width: width,
                 height: height,
                 backgroundAlpha: 0.85,
                 backgroundColor: 0x000000,
                 antialias: false, // Disable for performance
-                resolution: window.devicePixelRatio || 1,
+                resolution: this.currentResolution,
                 autoDensity: true,
                 powerPreference: 'high-performance'
-            });
+            };
 
-            // Add canvas to container
-            containerDiv.appendChild(this.app.view);
-            this.container = containerDiv;
+            // Pixi v8 path: async Application.init()
+            if (PIXI.Application.prototype && typeof PIXI.Application.prototype.init === 'function') {
+                this.app = new PIXI.Application();
+                this._initPromise = this.app.init(appOptions)
+                    .then(() => {
+                        this._finalizePixiInit();
+                        this._initPromise = null;
+                        return true;
+                    })
+                    .catch((err) => {
+                        console.error('[GameplayRenderer] Failed to initialize WebGL:', err);
+                        this._initPromise = null;
+                        this.useWebGL = false;
+                        this.app = null;
+                        return false;
+                    });
+                return false;
+            }
 
-            // Create layer containers
-            this.layers.receptors = new PIXI.Container();
-            this.layers.holdBodies = new PIXI.Container();
-            this.layers.noteHeads = new PIXI.Container();
-            this.layers.effects = new PIXI.Container();
-
-            // Add layers to stage (bottom to top)
-            this.app.stage.addChild(this.layers.receptors);
-            this.app.stage.addChild(this.layers.holdBodies);
-            this.app.stage.addChild(this.layers.noteHeads);
-            this.app.stage.addChild(this.layers.effects);
-
-            // Initialize sprite pools (Now adds them to layers immediately)
-            this._initSpritePools();
-
-            // Initialize offscreen canvas for static effects
-            this._initOffscreenCanvas();
-
-            this.useWebGL = true;
-            console.log('[GameplayRenderer] WebGL initialized successfully');
+            // Pixi v7 path: constructor options
+            this.app = new PIXI.Application(appOptions);
+            this._finalizePixiInit();
             return true;
 
         } catch (err) {
             console.error('[GameplayRenderer] Failed to initialize WebGL:', err);
             return false;
         }
+    }
+
+    _finalizePixiInit() {
+        if (!this.app || !this._containerDiv) return;
+
+        const appCanvas = this.app.canvas || this.app.view;
+        if (!appCanvas) {
+            throw new Error('Pixi application canvas/view is unavailable');
+        }
+
+        this._containerDiv.appendChild(appCanvas);
+        this.container = this._containerDiv;
+
+        // Create layer containers
+        this.layers.receptors = new PIXI.Container();
+        this.layers.holdBodies = new PIXI.Container();
+        this.layers.noteHeads = new PIXI.Container();
+        this.layers.effects = new PIXI.Container();
+
+        // Add layers to stage (bottom to top)
+        this.app.stage.addChild(this.layers.receptors);
+        this.app.stage.addChild(this.layers.holdBodies);
+        this.app.stage.addChild(this.layers.noteHeads);
+        this.app.stage.addChild(this.layers.effects);
+
+        // Initialize sprite pools (Now adds them to layers immediately)
+        this._initSpritePools();
+
+        // Initialize offscreen canvas for static effects
+        this._initOffscreenCanvas();
+
+        this.useWebGL = true;
+        console.log('[GameplayRenderer] WebGL initialized successfully');
     }
 
     /**
@@ -956,13 +1016,13 @@ class GameplayRenderer {
         // Hold/Roll bodies use TilingSprite for efficiency
         const placeholderTexture = PIXI.Texture.WHITE;
         for (let i = 0; i < 150; i++) {
-            const holdBody = new PIXI.TilingSprite(placeholderTexture);
+            const holdBody = this._createTilingSprite(placeholderTexture);
             holdBody.anchor.set(0.5, 0);
             holdBody.visible = false;
             this.spritePools.holdBody.push(holdBody);
             this.layers.holdBodies.addChild(holdBody);
 
-            const rollBody = new PIXI.TilingSprite(placeholderTexture);
+            const rollBody = this._createTilingSprite(placeholderTexture);
             rollBody.anchor.set(0.5, 0);
             rollBody.visible = false;
             this.spritePools.rollBody.push(rollBody);
@@ -1082,9 +1142,9 @@ class GameplayRenderer {
             return null;
         }
 
-        // Create base texture if not exists
+        // Create base texture if not exists (v7/v8 compatible)
         if (!this.baseTextures[assetKey]) {
-            this.baseTextures[assetKey] = PIXI.BaseTexture.from(img);
+            this.baseTextures[assetKey] = PIXI.Texture.from(img);
         }
 
         // Create frame rectangle
@@ -1093,10 +1153,36 @@ class GameplayRenderer {
         const frame = new PIXI.Rectangle(frameX, frameY, frameWidth, frameHeight);
 
         // Create texture from frame
-        const texture = new PIXI.Texture(this.baseTextures[assetKey], frame);
+        const baseTexture = this.baseTextures[assetKey];
+        const isWholeImage = frameX === 0 && frameY === 0 && frameWidth === img.width && frameHeight === img.height;
+        const texture = isWholeImage ? baseTexture : this._createSubTexture(baseTexture, frame);
         this.textures[cacheKey] = texture;
 
         return texture;
+    }
+
+    _createTilingSprite(texture) {
+        // Pixi v8 prefers options object; v7 uses positional constructor
+        if (PIXI.TilingSprite && PIXI.TilingSprite.from) {
+            try {
+                return new PIXI.TilingSprite({ texture: texture, width: 1, height: 1 });
+            } catch (e) {
+                // Fall through to v7 constructor
+            }
+        }
+        return new PIXI.TilingSprite(texture);
+    }
+
+    _createSubTexture(baseTexture, frame) {
+        // Pixi v8 Texture constructor uses options object
+        try {
+            if (baseTexture && baseTexture.source) {
+                return new PIXI.Texture({ source: baseTexture.source, frame: frame });
+            }
+        } catch (e) {
+            // Fall through to v7 constructor path
+        }
+        return new PIXI.Texture(baseTexture.baseTexture || baseTexture, frame);
     }
 
     /**
@@ -1514,6 +1600,16 @@ class GameplayRenderer {
         this.app.renderer.resize(width, height);
     }
 
+    setResolution(resolution) {
+        if (!this.app || !this.app.renderer) return;
+        const safeRes = Math.max(0.75, Math.min(2, resolution || 1));
+        if (Math.abs(safeRes - this.currentResolution) < 0.01) return;
+
+        this.currentResolution = safeRes;
+        this.app.renderer.resolution = safeRes;
+        this.resize();
+    }
+
     /**
      * Destroy and cleanup
      */
@@ -1522,6 +1618,7 @@ class GameplayRenderer {
             this.app.destroy(true);
             this.app = null;
         }
+        this._initPromise = null;
         this.textures = {};
         this.baseTextures = {};
         this.useWebGL = false;
@@ -1648,14 +1745,6 @@ function startApp() {
     // Resume Audio Context if it exists (usually created on demand, but good practice for future)
     if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume();
-    }
-
-    // --- INITIALIZE GAMEPAD SUPPORT ---
-    if (typeof GamepadManager !== 'undefined') {
-        GamepadManager.init();
-        // Connect gamepad input to game input handler
-        GamepadManager.onInput = handleGamepadInput;
-        console.log('[Gamepad] Support initialized');
     }
 
     // --- INITIALIZE WEB WORKER FOR AUDIO DECODING ---
@@ -1911,8 +2000,8 @@ function selectSong(index) {
                     // If all are invalid, lb[0] is best invalid.
                     // Let's check if valid:
                     const top = lb[0];
-                    const fc = top.fcType || (top.judgments ? getFCType(top.judgments) : "");
-                    if (fc !== "Fail" && fc !== "Invalid") {
+                    const fc = top.clearType || (top.judgments ? getClearType(top.judgments) : "");
+                    if (fc !== "Failed" && fc !== "Invalid") {
                         bestGrade = top.grade;
                     }
                 }
@@ -2393,7 +2482,7 @@ function selectDifficulty(chartIndex) {
 
             setText('bs-ssr', (top.ssr || 0).toFixed(2));
             // Use saved FC Type (Fail/Invalid support) or calculate legacy
-            const calculatedFC = top.fcType || (top.judgments ? getClearType(top.judgments) : "");
+            const calculatedFC = top.clearType || (top.judgments ? getClearType(top.judgments) : "");
             setText('bs-clear', getClearText(calculatedFC));
 
             // Apply Color
@@ -3650,8 +3739,8 @@ function sortLeaderboard(a, b) {
     // Let's use fcType check if available, or infer.
 
     // Check A validity
-    const aInvalid = (a.fcType === "Fail" || a.fcType === "Invalid");
-    const bInvalid = (b.fcType === "Fail" || b.fcType === "Invalid");
+    const aInvalid = (a.clearType === "Failed" || a.clearType === "Invalid");
+    const bInvalid = (b.clearType === "Failed" || b.clearType === "Invalid");
 
     if (aInvalid && !bInvalid) return 1; // A is worse (bottom)
     if (!aInvalid && bInvalid) return -1; // A is better (top)
@@ -3965,14 +4054,11 @@ function quitGame() {
     gameState.isPaused = false;
     gameState.failed = false;
 
-    // Disable InputEngine gameplay polling, re-enable GamepadManager for menu navigation
+    // Disable gameplay input polling when returning to menus
     if (typeof InputEngine !== 'undefined') {
         InputEngine.enabled = false;
         InputEngine.onInput = null;
-    }
-    if (typeof GamepadManager !== 'undefined') {
-        GamepadManager.enabled = true;
-        GamepadManager.startPolling();
+        InputEngine.pauseGamepadPolling();
     }
 
     setScreen('setup-panel');
@@ -4117,7 +4203,7 @@ function viewScoreResults(entry) {
     gameState.npsHistory = [];
     gameState.pauseCount = 0; // Don't show pause count from stored? Or entry doesn't have it.
 
-    gameState.failed = (entry.grade === 'F' || entry.fcType === 'Fail');
+    gameState.failed = (entry.grade === 'F' || entry.clearType === 'Failed');
     gameState.meta = songLibrary[selectedSongIndex].meta; // Ensure meta matches current selection
 
     showResults();
@@ -4836,10 +4922,37 @@ function _gameTick(dtMs, timestamp) {
     }
 
     // --- BUILD VISIBLE NOTES ---
-    // FIX: Optimized adaptive quality check
+    // Adaptive quality state with hysteresis to avoid rapid quality bouncing
     const avgFrameTime = GameLoop.stats.frameTime;
-    const isLowFPS = avgFrameTime > 20;
-    const isVeryLowFPS = avgFrameTime > 33;
+    if (gameState._perfLowFrames === undefined) gameState._perfLowFrames = 0;
+    if (gameState._perfVeryLowFrames === undefined) gameState._perfVeryLowFrames = 0;
+    if (gameState._perfRecoverFrames === undefined) gameState._perfRecoverFrames = 0;
+    if (gameState._isLowFPS === undefined) gameState._isLowFPS = false;
+    if (gameState._isVeryLowFPS === undefined) gameState._isVeryLowFPS = false;
+
+    if (avgFrameTime > 20) gameState._perfLowFrames++;
+    else gameState._perfLowFrames = Math.max(0, gameState._perfLowFrames - 1);
+
+    if (avgFrameTime > 33) gameState._perfVeryLowFrames++;
+    else gameState._perfVeryLowFrames = Math.max(0, gameState._perfVeryLowFrames - 1);
+
+    if (avgFrameTime < 17) gameState._perfRecoverFrames++;
+    else gameState._perfRecoverFrames = 0;
+
+    if (!gameState._isLowFPS && gameState._perfLowFrames >= 8) gameState._isLowFPS = true;
+    if (gameState._isLowFPS && gameState._perfRecoverFrames >= 45) {
+        gameState._isLowFPS = false;
+        gameState._perfLowFrames = 0;
+    }
+
+    if (!gameState._isVeryLowFPS && gameState._perfVeryLowFrames >= 8) gameState._isVeryLowFPS = true;
+    if (gameState._isVeryLowFPS && gameState._perfRecoverFrames >= 60) {
+        gameState._isVeryLowFPS = false;
+        gameState._perfVeryLowFrames = 0;
+    }
+
+    const isLowFPS = gameState._isLowFPS;
+    const isVeryLowFPS = gameState._isVeryLowFPS;
 
     if (!gameState.colsActive) gameState.colsActive = [false, false, false, false];
     gameState.colsActive[0] = false; gameState.colsActive[1] = false;
@@ -5031,6 +5144,7 @@ function _gameRender(dtMs, timestamp) {
     if (typeof gameState.fpsTimer === 'undefined') gameState.fpsTimer = 0;
     // FIX: Throttle HUD updates more when FPS is low
     const adaptive = gameState._adaptiveQuality || {};
+    applyDynamicRenderResolution(adaptive);
     const hudUpdateInterval = adaptive.isVeryLowFPS ? 500 : 200;
     gameState.fpsTimer += frameTime;
     if (gameState.fpsTimer >= hudUpdateInterval) {
@@ -5211,6 +5325,13 @@ window.setJudgeDiff = setJudgeDiff;
 function setLifeDiff(val) { userConfig.lifeDifficulty = val; updateSettingsPreview(); }
 window.setLifeDiff = setLifeDiff;
 
+function setRenderQuality(mode) {
+    if (!['auto', 'performance', 'balanced', 'high'].includes(mode)) return;
+    userConfig.renderQuality = mode;
+    updateSettingsPreview();
+}
+window.setRenderQuality = setRenderQuality;
+
 function saveSettings() {
     localStorage.setItem('webSM_config', JSON.stringify(userConfig));
     setScreen('setup-panel');
@@ -5220,6 +5341,7 @@ window.saveSettings = saveSettings;
 function updateSettingsPreview() {
     const jDiff = userConfig.judgeDifficulty || 4;
     const lDiff = userConfig.lifeDifficulty || 4;
+    const rq = userConfig.renderQuality || 'auto';
 
     // Update Buttons
     const updateBtns = (id, val) => {
@@ -5233,6 +5355,13 @@ function updateSettingsPreview() {
     };
     updateBtns('set-judge-group', jDiff);
     updateBtns('set-life-group', lDiff);
+    const rqGroup = document.getElementById('set-render-quality-group');
+    if (rqGroup) {
+        rqGroup.querySelectorAll('.mod-toggle-btn').forEach(b => {
+            if (b.dataset.val === rq) b.classList.add('active');
+            else b.classList.remove('active');
+        });
+    }
 
     // Detailed Stats
     const container = document.getElementById('settings-detailed-stats');
@@ -5289,6 +5418,159 @@ function updateSettingsPreview() {
 }
 window.updateSettingsPreview = updateSettingsPreview;
 
+/* =========================================
+   PROFILE SYSTEM UI FUNCTIONS
+   ========================================= */
+
+function openProfile() {
+    setScreen('profile-modal');
+    populateProfileData();
+}
+window.openProfile = openProfile;
+
+function closeProfile() {
+    setScreen('setup-panel');
+}
+window.closeProfile = closeProfile;
+
+function populateProfileData() {
+    if (!window.PlayerProfile) return;
+    
+    const stats = window.PlayerProfile.getStats();
+    const profile = stats;
+    const formatted = stats.formattedStats || {};
+    
+    // Profile name
+    const nameEl = document.getElementById('profile-name-display');
+    if (nameEl) nameEl.innerText = profile.name || 'Player';
+    
+    // Overall rating
+    const overallEl = document.getElementById('profile-overall-rating');
+    if (overallEl) overallEl.innerText = (profile.ratings?.overall || 0).toFixed(2);
+    
+    // Stats row
+    const totalPlaysEl = document.getElementById('profile-total-plays');
+    if (totalPlaysEl) totalPlaysEl.innerText = profile.totalPlays || 0;
+    
+    const playTimeEl = document.getElementById('profile-play-time');
+    if (playTimeEl) playTimeEl.innerText = formatted.playTime || '0h 0m';
+    
+    const avgAccEl = document.getElementById('profile-avg-acc');
+    if (avgAccEl) avgAccEl.innerText = (profile.stats?.avgAccuracy || 0).toFixed(2) + '%';
+    
+    const bestAccEl = document.getElementById('profile-best-acc');
+    if (bestAccEl) bestAccEl.innerText = (profile.stats?.bestAccuracy || 0).toFixed(2) + '%';
+    
+    // Skillset ratings
+    const skillsets = ['stream', 'jumpstream', 'handstream', 'chordjack', 'technical', 'jackSpeed', 'stamina'];
+    skillsets.forEach(skill => {
+        const el = document.getElementById('skill-' + skill);
+        if (el) el.innerText = (profile.ratings?.[skill] || 0).toFixed(2);
+    });
+    
+    // Judgment stats
+    const j = profile.stats || {};
+    const totalJ = formatted.totalJudgments || 1;
+    
+    const setJudgeStat = (type, count, pct) => {
+        const countEl = document.getElementById('profile-' + type + '-count');
+        const pctEl = document.getElementById('profile-' + type + '-pct');
+        if (countEl) countEl.innerText = count.toLocaleString();
+        if (pctEl) pctEl.innerText = pct + '%';
+    };
+    
+    setJudgeStat('marv', j.totalMarvelous || 0, formatted.marvelousRate || '0.00');
+    setJudgeStat('perf', j.totalPerfect || 0, formatted.perfectRate || '0.00');
+    setJudgeStat('great', j.totalGreat || 0, formatted.greatRate || '0.00');
+    setJudgeStat('good', j.totalGood || 0, ((j.totalGood || 0) / totalJ * 100).toFixed(2));
+    setJudgeStat('bad', j.totalBad || 0, ((j.totalBad || 0) / totalJ * 100).toFixed(2));
+    setJudgeStat('miss', j.totalMiss || 0, ((j.totalMiss || 0) / totalJ * 100).toFixed(2));
+    
+    // Top scores
+    const topScores = window.PlayerProfile.getTopScores(25);
+    const scoresContainer = document.getElementById('profile-top-scores');
+    if (scoresContainer) {
+        if (topScores.length === 0) {
+            scoresContainer.innerHTML = '<div style="text-align:center; color:#666; padding:20px;">No scores yet. Play some songs!</div>';
+        } else {
+            scoresContainer.innerHTML = topScores.map((score, idx) => {
+                const date = new Date(score.date);
+                const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                return `
+                    <div class="profile-score-item">
+                        <div class="profile-score-rank">#${idx + 1}</div>
+                        <div class="profile-score-song">
+                            <div class="song-title">${score.songTitle || 'Unknown'}</div>
+                            <div class="song-diff">${score.difficulty} (${score.meter})</div>
+                        </div>
+                        <div class="profile-score-acc">${(score.accuracy || 0).toFixed(2)}%</div>
+                        <div class="profile-score-ssr">${(score.ssr || 0).toFixed(2)}</div>
+                        <div class="profile-score-date">${dateStr}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+    }
+}
+
+function renameProfilePrompt() {
+    if (!window.PlayerProfile) return;
+    const currentName = window.PlayerProfile.load().name || 'Player';
+    const newName = prompt('Enter new profile name:', currentName);
+    if (newName && newName.trim()) {
+        window.PlayerProfile.rename(newName.trim());
+        populateProfileData();
+    }
+}
+window.renameProfilePrompt = renameProfilePrompt;
+
+function exportProfileData() {
+    if (!window.PlayerProfile) return;
+    const data = window.PlayerProfile.export();
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'webSM_profile_' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+window.exportProfileData = exportProfileData;
+
+function importProfilePrompt() {
+    if (!window.PlayerProfile) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const result = window.PlayerProfile.import(event.target.result);
+            if (result.success) {
+                alert('Profile imported successfully!');
+                populateProfileData();
+            } else {
+                alert('Failed to import profile: ' + result.error);
+            }
+        };
+        reader.readAsText(file);
+    };
+    input.click();
+}
+window.importProfilePrompt = importProfilePrompt;
+
+function resetProfilePrompt() {
+    if (!window.PlayerProfile) return;
+    if (confirm('WARNING: This will delete ALL your profile data including scores and ratings.\n\nThis cannot be undone!\n\nAre you sure?')) {
+        if (confirm('Really delete everything? Click OK to confirm.')) {
+            window.PlayerProfile.reset();
+            populateProfileData();
+        }
+    }
+}
+window.resetProfilePrompt = resetProfilePrompt;
 
 function togglePause() {
     if (!gameState.isPlaying || gameState.failed) return;
@@ -6173,10 +6455,11 @@ function startEngine() {
     // --- INPUT ENGINE: Init with ~1kHz gamepad polling, keyboard handled by handleInput ---
     if (typeof InputEngine !== 'undefined') {
         InputEngine.setKeyMap(userConfig.keys);
-        if (!InputEngine._gamepadPollActive) {
+        if (!InputEngine._initialized) {
             InputEngine.init({ keys: userConfig.keys, skipKeyboard: true });
         }
         InputEngine.enabled = true;
+        InputEngine.resumeGamepadPolling();
 
         // Route InputEngine gamepad events into existing game input pipeline
         InputEngine.onInput = function (evt) {
@@ -6185,15 +6468,6 @@ function startEngine() {
             }
         };
 
-        // Disable GamepadManager polling to avoid double events —
-        // InputEngine's ~1kHz MessageChannel poll replaces rAF-based polling
-        if (typeof GamepadManager !== 'undefined' && GamepadManager.enabled) {
-            GamepadManager.enabled = false;
-            if (GamepadManager.pollId) {
-                cancelAnimationFrame(GamepadManager.pollId);
-                GamepadManager.pollId = null;
-            }
-        }
     }
 
     // Reset HUD Elements
@@ -6945,6 +7219,13 @@ function saveScore(forceFail = false) {
     const diff = (chart.difficultyCalc && chart.difficultyCalc.overall) ? chart.difficultyCalc.overall : (parseFloat(chart.meter) || 0);
     const ssr = calculateSSR(diff, accuracyForLB / 100);
 
+    // 3b. Skillset SSR Calculation (using MSD data for accurate skill-specific ratings)
+    const msd = chart.difficultyCalc || { overall: diff };
+    const rate = (modConfig && modConfig.rate) ? modConfig.rate : 1.0;
+    const skillsetSSRs = window.calculateSSRApprox ?
+        window.calculateSSRApprox(msd, accuracyForLB, rate) :
+        { stream: 0, jumpstream: 0, handstream: 0, chordjack: 0, technical: 0, jackSpeed: 0, stamina: 0, overall: ssr };
+
     // 4. Score Object
     const scoreObj = {
         score: Math.round(j4Stats.score),
@@ -6952,17 +7233,42 @@ function saveScore(forceFail = false) {
         ssr: parseFloat(ssr.toFixed(2)),
         judgments: j4Stats.judgments,
         grade: (gameState.failed || forceFail) ? (modConfig.scoringSystem === 'ddr' ? 'E' : 'F') : getGrade(accuracyForLB, j4Stats.score, j4Stats.judgments),
-        clearType: getClearType(j4Stats.judgments, gameState.failed || forceFail),
+        clearType: getClearType(j4Stats.judgments, gameState.failed || forceFail, accuracyForLB, gameState.hasPausedDuringPlay),
         maxCombo: gameState.maxCombo,
         date: Date.now(),
         timestamp: Date.now(), // Legacy support
         dpScore: ((accuracyForLB / 100) * (gameState.totalNotesInChart * 2)).toFixed(2),
         osuScore: Math.round(gameState.osuScore),
         judgeDiff: 4, // Leaderboard is normalized to J4
-        rate: (modConfig && modConfig.rate) ? modConfig.rate : 1.0,
+        rate: rate,
         detailedHits: gameState.detailedHits,
-        replayLog: gameState.replayLog
+        replayLog: gameState.replayLog,
+        skillsetSSRs: skillsetSSRs // Store skillset ratings with the score
     };
+
+    // 4b. Save to Player Profile (with skillset ratings)
+    if (window.PlayerProfile) {
+        const songKey = window.PlayerProfile.getSongKey(song.meta, chart);
+        window.PlayerProfile.addScore({
+            songKey: songKey,
+            songTitle: song.meta.title,
+            songArtist: song.meta.artist,
+            difficulty: chart.difficulty,
+            meter: chart.meter,
+            accuracy: accuracyForLB,
+            wifePercent: accuracyForLB,
+            ssr: ssr,
+            skillsetSSRs: skillsetSSRs,
+            grade: scoreObj.grade,
+            clearType: scoreObj.clearType,
+            maxCombo: gameState.maxCombo,
+            judgments: j4Stats.judgments,
+            rate: rate,
+            playTime: (gameState.totalNotesInChart * 2) || 0, // Estimated seconds
+            totalNotes: gameState.totalNotesInChart,
+            chartMSD: msd
+        });
+    }
 
     // 5. Save Score to Leaderboard (Array of top 10)
     const key = `webSM_lb_${song.meta.title}_${chart.difficulty}`;
@@ -7182,8 +7488,8 @@ function renderFullLeaderboard() {
 
         // Border gets Clear Type Color
         let clearColor = "#fff";
-        if (entry.fcType && CLEAR_COLORS[entry.fcType]) {
-            clearColor = CLEAR_COLORS[entry.fcType];
+        if (entry.clearType && CLEAR_COLORS[entry.clearType]) {
+            clearColor = CLEAR_COLORS[entry.clearType];
         }
 
         // Convert Hex to RGBA for tint (Grade Color)

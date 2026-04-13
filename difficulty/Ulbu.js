@@ -20,13 +20,16 @@ function runSequencers(calc) {
   var hsMods = [new HSMod(), new HSMod()];
   var cjMods = [new CJMod(), new CJMod()];
   var cjDensityMods = [new CJDensityMod(), new CJDensityMod()];
+  var ohJumpMods = [new OHJumpMod(), new OHJumpMod()];
   var balanceMods = [new BalanceMod(), new BalanceMod()];
   var chaosMods = [new ChaosMod(), new ChaosMod()];
   var wrBalanceMods = [new WideRangeBalanceMod(), new WideRangeBalanceMod()];
   var wrAnchorMods = [new WideRangeAnchorMod(), new WideRangeAnchorMod()];
   var ohtMods = [new OHTrillMod(), new OHTrillMod()];
+  var minijackMods = [new MinijackMod(), new MinijackMod()];
   var wrRollMods = [new WideRangeRollMod(), new WideRangeRollMod()];
   var wrjtMods = [new WideRangeJumptrillMod(), new WideRangeJumptrillMod()];
+  var wrjjMods = [new WideRangeJJMod(), new WideRangeJJMod()];
   var anchorSequencers = [new AnchorSequencer(), new AnchorSequencer()];
 
   // Setup pattern mods that need window configuration
@@ -37,15 +40,16 @@ function runSequencers(calc) {
     ohtMods[hand].setup(MAX_MOVING_WINDOW_SIZE);
     wrRollMods[hand].setup(MAX_MOVING_WINDOW_SIZE);
     wrjtMods[hand].setup(MAX_MOVING_WINDOW_SIZE);
+    wrjjMods[hand].setup(MAX_MOVING_WINDOW_SIZE);
   }
 
   // Store pattern mods in calc
   calc.patternMods = {
     streamMods: streamMods, jsMods: jsMods, hsMods: hsMods,
-    cjMods: cjMods, cjDensityMods: cjDensityMods,
+    cjMods: cjMods, cjDensityMods: cjDensityMods, ohJumpMods: ohJumpMods,
     balanceMods: balanceMods, chaosMods: chaosMods,
     wrBalanceMods: wrBalanceMods, wrAnchorMods: wrAnchorMods,
-    ohtMods: ohtMods, wrRollMods: wrRollMods, wrjtMods: wrjtMods,
+    ohtMods: ohtMods, minijackMods: minijackMods, wrRollMods: wrRollMods, wrjtMods: wrjtMods, wrjjMods: wrjjMods,
     anchorSequencers: anchorSequencers,
   };
 
@@ -53,6 +57,7 @@ function runSequencers(calc) {
   for (var hi = 0; hi < BOTH_HANDS.length; hi++) {
     var hand = BOTH_HANDS[hi];
     var lastMri = createMetaRowInfo();
+    var lastMt = meta_type.meta_type_init;
     lastMri.time = -5.0;
 
     for (var itv = 0; itv < calc.numitv; itv++) {
@@ -72,6 +77,7 @@ function runSequencers(calc) {
         var handMask = HAND_COL_MASKS[hand];
         var handNotes = row.rowNotes & handMask;
         var handCount = popcount(handNotes);
+        var colType = handCount >= 2 ? col_ohjump : (handNotes === 0 ? col_left : ((handNotes & (hand === LEFT_HAND ? 0b0001 : 0b0100)) ? col_left : col_right));
 
         if (handCount > 0) {
           if (hand === LEFT_HAND) {
@@ -81,12 +87,14 @@ function runSequencers(calc) {
             if (handNotes & 0b0100) itvhi.col_taps[0]++;
             if (handNotes & 0b1000) itvhi.col_taps[1]++;
           }
+          if (handCount >= 2) itvhi.col_taps[col_ohjump] += handCount;
         }
 
         // Row-by-row meta sequencing
         var mri = createMetaRowInfo();
         mri.time = row.rowTime;
         mri.count = handCount;
+        mri.col_type = colType;
         mri.last_count = lastMri.count;
         mri.last_last_count = lastMri.last_last_count;
         mri.notes = handNotes;
@@ -94,41 +102,72 @@ function runSequencers(calc) {
         mri.last_last_notes = lastMri.last_last_notes;
         mri.ms_now = lastMri.time > -4 ? msFrom(row.rowTime, lastMri.time) : 1000;
 
+        var baseTypeNow = base_type.base_type_init;
+        if (lastMri.count > 0 && handCount > 0) {
+          if (lastMri.count === 1 && handCount === 1) {
+            if (lastMri.col_type === col_left && colType === col_right) baseTypeNow = base_type.base_left_right;
+            else if (lastMri.col_type === col_right && colType === col_left) baseTypeNow = base_type.base_right_left;
+            else baseTypeNow = base_type.base_single_single;
+          } else if (lastMri.count === 1 && handCount >= 2) {
+            baseTypeNow = base_type.base_single_jump;
+          } else if (lastMri.count >= 2 && handCount === 1) {
+            baseTypeNow = base_type.base_jump_single;
+          } else if (lastMri.count >= 2 && handCount >= 2) {
+            baseTypeNow = base_type.base_jump_jump;
+          }
+        }
+        mitvi._base_types[baseTypeNow] = (mitvi._base_types[baseTypeNow] || 0) + handCount;
+
         updateItvTapCounts(mitvi._itvi, handCount);
         basicRowSequencing(mri, lastMri, mitvi);
 
         // Advance complex pattern mod sequencers
         var mt = determine_meta_type(handNotes, lastMri.notes, lastMri.last_last_notes, handCount, lastMri.count, lastMri.last_last_count);
         ohtMods[hand].operator(itvhi, mt, mri.ms_now);
-        anchorSequencers[hand].advance_sequencing(handNotes);
+        if (handCount > 0) {
+          anchorSequencers[hand].advance_sequencing(colType, row.rowTime, mri.ms_now);
+          wrRollMods[hand].advance_sequencing(baseTypeNow, mt, lastMt, anchorSequencers[hand].get_any_ms_window(), anchorSequencers[hand].get_cc_ms_now());
+          wrjtMods[hand].advance_sequencing(baseTypeNow, mt, lastMt, anchorSequencers[hand].get_any_ms_window());
+          wrjjMods[hand].advance_sequencing(colType, row.rowTime);
+        }
+        if (handCount > 0) {
+          ohJumpMods[hand].advance_sequencing(colType, baseTypeNow);
+          minijackMods[hand].advance_sequencing(colType, mri.ms_now);
+        }
+        if (popcount(row.rowNotes & HAND_COL_MASKS[hand === LEFT_HAND ? RIGHT_HAND : LEFT_HAND]) > 0) {
+          minijackMods[hand].advance_off_hand_sequencing();
+        }
 
-        if (mri.ms_now > 0 && mri.ms_now < 10000) {
-          chaosMods[hand].advance_sequencing([mri.ms_now, lastMri.ms_now || mri.ms_now]);
+        if (handCount > 0) {
+          chaosMods[hand].advance_sequencing(anchorSequencers[hand].get_any_ms_window());
         }
 
         lastMri = mri;
+        lastMt = mt;
       }
-
-      // End of interval
-      interval_end_itvhi(itvhi);
-      anchorSequencers[hand].interval_end();
-      chaosMods[hand].interval_end();
-
-      // Per-interval pattern mod evaluation
-      streamMods[hand].operator(mitvi);
-      jsMods[hand].operator(mitvi);
-      hsMods[hand].operator(mitvi);
-      cjMods[hand].operator(mitvi);
-      cjDensityMods[hand].operator(mitvi);
-      chaosMods[hand].operator(calc.itvTotalTaps[itv]);
-      balanceMods[hand].operator(itvhi);
-      wrBalanceMods[hand].operator(itvhi);
-      wrAnchorMods[hand].operator(itvhi, anchorSequencers[hand]);
-      wrRollMods[hand].operator(itvhi);
-      wrjtMods[hand].operator(itvhi);
 
       calc.itvTotalTaps[itv] = totalTaps;
       calc.itvJumpTaps[itv] = jumpTaps;
+
+      // End of interval: finalize dependent mods before resetting interval state
+      calc.depOHT[hand][itv] = ohtMods[hand].operator(itvhi);
+      calc.depStream[hand][itv] = streamMods[hand].operator(mitvi);
+      calc.depJS[hand][itv] = jsMods[hand].operator(mitvi);
+      calc.depHS[hand][itv] = hsMods[hand].operator(mitvi);
+      calc.depCJ[hand][itv] = cjMods[hand].operator(mitvi);
+      calc.depCJDensity[hand][itv] = cjDensityMods[hand].operator(mitvi);
+      calc.depOHJ[hand][itv] = ohJumpMods[hand].operator(mitvi, itvhi);
+      calc.depMinijack[hand][itv] = minijackMods[hand].operator(itvhi);
+      calc.depChaos[hand][itv] = chaosMods[hand].operator(calc.itvTotalTaps[itv]);
+      calc.depBalance[hand][itv] = balanceMods[hand].operator(itvhi);
+      calc.depWRBalance[hand][itv] = wrBalanceMods[hand].operator(itvhi);
+      calc.depWRAnchor[hand][itv] = wrAnchorMods[hand].operator(itvhi, anchorSequencers[hand]);
+      calc.depWRRoll[hand][itv] = wrRollMods[hand].operator(itvhi);
+      calc.depWRJT[hand][itv] = wrjtMods[hand].operator(itvhi);
+      calc.depWRJJ[hand][itv] = wrjjMods[hand].operator(itvhi);
+
+      interval_end_itvhi(itvhi);
+      anchorSequencers[hand].interval_end();
     }
   }
 
@@ -154,7 +193,9 @@ function runSequencers(calc) {
     }
 
     calc.seqFlamJam[itv] = flamJam.getModAndReset();
-    calc.seqTheThing[itv] = theThing.getModAndReset();
+    var thingMods = theThing.getModsAndReset();
+    calc.seqTheThing[itv] = thingMods.theThing;
+    calc.seqTheThing2[itv] = thingMods.theThing2;
     calc.seqVOHT[itv] = voht.getModAndReset(totalTaps, jumpTaps);
   }
 }
@@ -221,20 +262,31 @@ function initAdjDiff(calc) {
     for (var itv = 0; itv < calc.numitv; itv++) {
       var mitvi = calc.metaItvInfo[hand][itv];
       var itvhi = calc.itvHandInfo[hand][itv];
+      var d = getItvPatternData(calc, hand, itv);
       var npsBase = calc.initBaseDiffNPS[hand][itv];
 
-      var streamPm = pm.streamMods[hand].operator(mitvi);
-      var jsPm = pm.jsMods[hand].operator(mitvi);
-      var hsPm = pm.hsMods[hand].operator(mitvi);
-      var cjPm = pm.cjMods[hand].operator(mitvi);
-      var cjDensityPm = pm.cjDensityMods[hand].operator(mitvi);
-      var balancePm = pm.balanceMods[hand].operator(itvhi);
-      var chaosPm = pm.chaosMods[hand].operator(calc.itvTotalTaps[itv]);
-      var wrBalancePm = pm.wrBalanceMods[hand].operator(itvhi);
-      var wrAnchorPm = pm.wrAnchorMods[hand].operator(itvhi, pm.anchorSequencers[hand]);
-      var ohtPm = pm.ohtMods[hand].pmod;
-      var wrRollPm = pm.wrRollMods[hand].operator(itvhi);
-      var wrjtPm = pm.wrjtMods[hand].operator(itvhi);
+      var streamPm = calc.depStream[hand][itv];
+      var jsPm = calc.depJS[hand][itv];
+      var hsPm = calc.depHS[hand][itv];
+      var cjPm = calc.depCJ[hand][itv];
+      var cjDensityPm = calc.depCJDensity[hand][itv];
+      var ohjPm = calc.depOHJ[hand][itv];
+      var balancePm = calc.depBalance[hand][itv];
+      var chaosPm = calc.depChaos[hand][itv];
+      var wrBalancePm = calc.depWRBalance[hand][itv];
+      var wrAnchorPm = calc.depWRAnchor[hand][itv];
+      var ohtPm = calc.depOHT[hand][itv];
+      var wrRollPm = calc.depWRRoll[hand][itv];
+      var wrjtPm = calc.depWRJT[hand][itv];
+      var wrjjPm = calc.depWRJJ[hand][itv];
+      var vohtPm = calc.seqVOHT[itv];
+      var flamJamPm = calc.seqFlamJam[itv];
+      var theThingPm = calc.seqTheThing[itv];
+      var theThing2Pm = calc.seqTheThing2[itv];
+      var rollPm = pmRoll(d);
+      var rollJsPm = pmRollJS(d);
+      var minijackPm = calc.depMinijack[hand][itv];
+      var hsDensityPm = pmHSDensity(d);
 
       for (var ss = 0; ss < NUM_SKILLSET; ss++) {
         if (ss === Skill.Overall || ss === Skill.Stamina) continue;
@@ -243,35 +295,35 @@ function initAdjDiff(calc) {
 
         switch (ss) {
           case Skill.Stream:
-            pmodProduct = streamPm;
+            pmodProduct = streamPm * ohtPm * vohtPm * rollPm * wrRollPm * wrjtPm * wrjjPm * flamJamPm;
             adjDiff = npsBase * pmodProduct * BASE_SCALERS[ss];
             stamBase = adjDiff;
             break;
           case Skill.Jumpstream:
-            pmodProduct = jsPm * balancePm * chaosPm * wrBalancePm;
+            pmodProduct = jsPm * wrBalancePm * wrjtPm * wrjjPm * vohtPm * rollJsPm * flamJamPm;
             adjDiff = npsBase * pmodProduct * BASE_SCALERS[ss];
             adjDiff /= Math.max(hsPm, 1.0);
-            adjDiff *= calc.seqVOHT[itv];
+            adjDiff /= Math.sqrt(Math.max(ohtPm * 0.95, 0.5));
             var hsProd = hsPm * balancePm * chaosPm * wrBalancePm;
             stamBase = Math.max(adjDiff, npsBase * hsProd);
             break;
           case Skill.Handstream:
-            pmodProduct = hsPm * balancePm * chaosPm * cjDensityPm * wrBalancePm;
+            pmodProduct = hsPm * ohtPm * theThingPm * wrRollPm * wrjtPm * wrjjPm * vohtPm * flamJamPm * hsDensityPm;
             adjDiff = npsBase * pmodProduct * BASE_SCALERS[ss];
             var jsProd = jsPm * balancePm * chaosPm * wrBalancePm;
             stamBase = Math.max(adjDiff, npsBase * jsProd);
             break;
           case Skill.Chordjack:
-            pmodProduct = cjPm * cjDensityPm * ohtPm * wrRollPm * wrjtPm * wrAnchorPm;
+            pmodProduct = cjPm * wrjtPm * vohtPm * flamJamPm;
             adjDiff = calc.initBaseDiffCJ[hand][itv] * pmodProduct * BASE_SCALERS[ss];
             stamBase = npsBase * pmodProduct * BASE_SCALERS[ss];
             break;
           case Skill.Technical:
-            pmodProduct = streamPm * jsPm * hsPm * cjPm * balancePm * chaosPm * cjDensityPm * wrBalancePm;
+            pmodProduct = ohtPm * vohtPm * balancePm * rollPm * chaosPm * wrjtPm * wrjjPm * wrRollPm * flamJamPm * minijackPm * theThingPm * theThing2Pm;
             var techBase = calc.initBaseDiffTech[hand][itv];
             adjDiff = techBase * pmodProduct * BASE_SCALERS[ss];
             adjDiff /= Math.max(Math.pow(cjPm + 0.05, 2.0), 1.0);
-            adjDiff *= Math.sqrt(calc.seqVOHT[itv]);
+            adjDiff *= Math.sqrt(ohtPm);
             stamBase = npsBase * pmodProduct * BASE_SCALERS[ss];
             break;
           default:

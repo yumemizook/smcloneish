@@ -80,10 +80,13 @@ var meta_type = {
 };
 
 var base_type = {
-  base_single_single: 0,
-  base_single_jump: 1,
-  base_jump_single: 2,
-  base_jump_jump: 3,
+  base_type_init: 0,
+  base_single_single: 1,
+  base_single_jump: 2,
+  base_jump_single: 3,
+  base_jump_jump: 4,
+  base_left_right: 5,
+  base_right_left: 6,
 };
 
 // ─── Utility functions ──────────────────────────────────────────────────
@@ -136,6 +139,24 @@ function msToScaledNps(ms) {
   return ms > 0 ? (1000.0 / ms) * FINALSCALER : 0;
 }
 
+var ANY_MS_EPSILON = 0.1;
+
+function any_ms_is_greater(a, b) {
+  return (a - b) > ANY_MS_EPSILON;
+}
+
+function any_ms_is_lesser(a, b) {
+  return (b - a) > ANY_MS_EPSILON;
+}
+
+function any_ms_is_close(a, b) {
+  return Math.abs(a - b) <= ANY_MS_EPSILON;
+}
+
+function any_ms_is_zero(a) {
+  return any_ms_is_close(a, 0.0);
+}
+
 function itvIdxToTime(idx) {
   return idx * ITV_DURATION;
 }
@@ -145,17 +166,27 @@ function weightedAverage(a, b, w1, w2) {
 }
 
 function div_high_by_low(a, b) {
+  if (b > a) {
+    var t = a;
+    a = b;
+    b = t;
+  }
   return b > 0 ? a / b : 1.0;
 }
 
 function div_low_by_high(a, b) {
-  return b > 0 ? a / b : 0.0;
+  if (b > a) {
+    var t = a;
+    a = b;
+    b = t;
+  }
+  return a > 0 ? b / a : 0.0;
 }
 
 function diff_high_by_low(a, b) {
   var high = Math.max(a, b);
   var low = Math.min(a, b);
-  return low > 0 ? high / low : 0;
+  return high - low;
 }
 
 function cv(arr) {
@@ -171,6 +202,7 @@ var neutral = 1.0;
 // ─── Column helpers ─────────────────────────────────────────────────────
 var col_left = 0;
 var col_right = 1;
+var col_ohjump = 2;
 var col_ids = [0, 1, 2, 3];
 
 function is_jack_at_col(col, notes, last_notes) {
@@ -195,10 +227,10 @@ function is_alternating_chord_single(count, last_count) {
 // ─── ItvHandInfo helpers ────────────────────────────────────────────────
 
 function createItvHandInfo(window_size) {
-  if (window_size === undefined) window_size = 5;
+  if (window_size === undefined) window_size = MAX_MOVING_WINDOW_SIZE;
   return {
-    col_taps: [0, 0],
-    col_taps_window: [[], []],
+    col_taps: [0, 0, 0],
+    col_taps_window: [[], [], []],
     window_idx: 0,
     window_size: window_size,
   };
@@ -228,8 +260,9 @@ function get_col_prop_low_by_high(itvhi) {
 
 function get_taps_windowi(itvhi, window) {
   var ws = Math.min(window, itvhi.window_size);
-  var sum = 0;
-  for (var i = 0; i < ws; i++) {
+  if (ws <= 0) return 0;
+  var sum = itvhi.col_taps[col_left] + itvhi.col_taps[col_right];
+  for (var i = 1; i < ws; i++) {
     var idx = (itvhi.window_idx - i + itvhi.window_size) % itvhi.window_size;
     sum += (itvhi.col_taps_window[col_left][idx] || 0) + (itvhi.col_taps_window[col_right][idx] || 0);
   }
@@ -242,8 +275,9 @@ function get_taps_windowf(itvhi, window) {
 
 function get_col_taps_windowi(itvhi, col, window) {
   var ws = Math.min(window, itvhi.window_size);
-  var sum = 0;
-  for (var i = 0; i < ws; i++) {
+  if (ws <= 0) return 0;
+  var sum = itvhi.col_taps[col] || 0;
+  for (var i = 1; i < ws; i++) {
     var idx = (itvhi.window_idx - i + itvhi.window_size) % itvhi.window_size;
     sum += itvhi.col_taps_window[col][idx] || 0;
   }
@@ -265,8 +299,9 @@ function get_col_prop_low_by_high_window(itvhi, window) {
 function interval_end_itvhi(itvhi) {
   itvhi.col_taps_window[col_left][itvhi.window_idx] = itvhi.col_taps[col_left];
   itvhi.col_taps_window[col_right][itvhi.window_idx] = itvhi.col_taps[col_right];
+  itvhi.col_taps_window[col_ohjump][itvhi.window_idx] = itvhi.col_taps[col_ohjump];
   itvhi.window_idx = (itvhi.window_idx + 1) % itvhi.window_size;
-  itvhi.col_taps = [0, 0];
+  itvhi.col_taps = [0, 0, 0];
 }
 
 // ─── MetaRowInfo ────────────────────────────────────────────────────────
@@ -276,6 +311,7 @@ function createMetaRowInfo() {
     time: 0,
     ms_now: 0,
     count: 0,
+    col_type: col_left,
     last_count: 0,
     last_last_count: 0,
     notes: 0,
@@ -298,6 +334,7 @@ function initializeMetaItvInfo() {
       taps_by_size: [0, 0, 0, 0],
       mixed_hs_density_tap_bonus: 0,
     },
+    _base_types: new Array(base_type.base_right_left + 1).fill(0),
     seriously_not_js: 0,
     definitely_not_jacks: 0,
     actual_jacks: 0,
@@ -325,6 +362,7 @@ function handleItvIntervalEnd(mitvi) {
   mitvi.num_var = 0;
   mitvi.basically_vibro = true;
   mitvi.dunk_it = false;
+  mitvi._base_types = new Array(base_type.base_right_left + 1).fill(0);
   mitvi._itvi.total_taps = 0;
   mitvi._itvi.chord_taps = 0;
   mitvi._itvi.mixed_hs_density_tap_bonus = 0;

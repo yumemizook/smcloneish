@@ -252,3 +252,26 @@ TheThingMod.prototype.getModAndReset = function() {
   this.tt2.reset();
   return pmod;
 };
+
+TheThingMod.prototype.getModsAndReset = function() {
+  var pmod1 = 1.0;
+  var pmod2 = 1.0;
+  for (var i = 0; i < 4; i++) {
+    pmod1 = Math.min(pmod1, this.tt1.modParts[i]);
+    pmod2 = Math.min(pmod2, this.tt2.modParts[i]);
+  }
+  if (this.tt1.slipCounter === 0) {
+    pmod1 = 1.0;
+  }
+  if (this.tt2.slipCounter === 0) {
+    pmod2 = 1.0;
+  }
+  pmod1 = Math.max(this.minMod, Math.min(pmod1, this.maxMod));
+  pmod2 = Math.max(this.minMod, Math.min(pmod2, this.maxMod));
+  this.tt1.reset();
+  this.tt2.reset();
+  return {
+    theThing: pmod1,
+    theThing2: pmod2,
+  };
+};
