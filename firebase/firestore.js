@@ -284,6 +284,94 @@ async function getLeaderboard(songKey, rate, judge, limitCount = 50) {
 }
 
 /**
+ * Upload all local scores to Firestore
+ * @param {string} uid - User ID
+ * @param {Object} localScores - Local scores object from profile (keyed by songKey)
+ * @returns {Promise<Object>} Upload result with count and any errors
+ */
+async function uploadLocalScores(uid, localScores) {
+  const results = { uploaded: 0, skipped: 0, errors: [] };
+
+  if (!localScores || Object.keys(localScores).length === 0) {
+    return results;
+  }
+
+  // Process each song's scores
+  for (const [songKey, scoresArray] of Object.entries(localScores)) {
+    if (!Array.isArray(scoresArray)) continue;
+
+    for (const score of scoresArray) {
+      try {
+        // Skip if already uploaded (check by songKey + date combo)
+        const existingQuery = query(
+          collection(db, 'scores'),
+          where('uid', '==', uid),
+          where('songKey', '==', songKey),
+          where('date', '==', score.date)
+        );
+        const existing = await getDocs(existingQuery);
+
+        if (!existing.empty) {
+          results.skipped++;
+          continue;
+        }
+
+        // Upload the score
+        await submitScore(uid, {
+          songKey: songKey,
+          songTitle: score.songTitle,
+          songArtist: score.songArtist,
+          difficulty: score.difficulty,
+          meter: score.meter,
+          rate: score.rate || 1.0,
+          judge: score.judge || 4,
+          wifePercent: score.wifePercent || score.accuracy || 0,
+          accuracy: score.accuracy || 0,
+          ssr: score.ssr || 0,
+          skillsetSSRs: score.skillsetSSRs || {},
+          grade: score.grade,
+          clearType: score.clearType,
+          maxCombo: score.maxCombo,
+          judgments: score.judgments,
+          totalNotes: score.totalNotes,
+          playTime: score.playTime,
+          chartMSD: score.chartMSD,
+          date: score.date
+        });
+
+        results.uploaded++;
+      } catch (error) {
+        results.errors.push({ songKey, error: error.message });
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Upload local skillset data and stats to Firestore profile
+ * @param {string} uid - User ID
+ * @param {Object} localProfile - Local profile data
+ */
+async function uploadSkillsetData(uid, localProfile) {
+  const userRef = doc(db, 'users', uid);
+
+  const updateData = {
+    ratings: localProfile.ratings || {},
+    overallRating: localProfile.ratings?.overall || 0,
+    totalPlays: localProfile.totalPlays || 0,
+    totalPlayTime: localProfile.totalPlayTime || 0,
+    totalNotesHit: localProfile.totalNotesHit || 0,
+    stats: localProfile.stats || {},
+    lastUploadedAt: serverTimestamp()
+  };
+
+  // Use setDoc with merge to create if doesn't exist, update if exists
+  await setDoc(userRef, updateData, { merge: true });
+}
+
+/**
  * Get all scores for a specific user
  * @param {string} uid - User ID
  * @param {number} limitCount - Maximum results (default 100)
@@ -421,5 +509,7 @@ export {
   invalidateScore,
   deleteScore,
   recalcOverallRating,
-  syncProfileToOnline
+  syncProfileToOnline,
+  uploadLocalScores,
+  uploadSkillsetData
 };

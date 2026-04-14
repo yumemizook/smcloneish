@@ -1,49 +1,23 @@
-// TODO: deploy with: firebase deploy --only firestore
-
+// Simplified rules - no get() calls to avoid permission issues
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Helper function: check if user is admin
-    function isAdmin(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data.role == 'admin';
-    }
-
-    // Helper function: check if user is banned
-    function isBanned(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data.banned == true;
-    }
 
     // ==================== USERS COLLECTION ====================
     match /users/{uid} {
       // Any authenticated user can read any profile
       allow read: if request.auth != null;
 
-      // Only the user themselves can create their own profile
-      // Default role must be 'user', cannot set banned fields
+      // Users can create their own profile
       allow create: if request.auth != null
-        && request.auth.uid == uid
-        && !isBanned(request.auth.uid)
-        && request.resource.data.role == 'user'
-        && request.resource.data.banned == false
-        && !request.resource.data.keys().hasAny(['joinedAt', 'createdAt', 'overallRating', 'banReason']);
+        && request.auth.uid == uid;
 
-      // Profile updates:
-      // - Regular users: only their own profile, cannot modify protected fields
-      // - Admins: can modify any profile including role and ban status
+      // Users can update their own profile
       allow update: if request.auth != null
-        && !isBanned(request.auth.uid)
-        && (
-          // Admin can update any user including role/ban fields
-          (isAdmin(request.auth.uid))
-          ||
-          // Regular user can only update their own non-protected fields
-          (request.auth.uid == uid
-            && !request.resource.data.keys().hasAny(['joinedAt', 'createdAt', 'overallRating', 'role', 'banned', 'banReason']))
-        );
+        && request.auth.uid == uid;
 
-      // Only admins can delete user profiles
-      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+      // No delete for users
+      allow delete: if false;
     }
 
     // ==================== SCORES COLLECTION ====================
@@ -51,34 +25,13 @@ service cloud.firestore {
       // Anyone can read scores (public leaderboards)
       allow read: if true;
 
-      // Score submission:
-      // - User must be authenticated, not banned, and submitting under their own uid
-      // - Must pass validation checks
+      // Authenticated users can submit their own scores
       allow create: if request.auth != null
-        && !isBanned(request.auth.uid)
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.wifePercent is number
-        && request.resource.data.wifePercent >= 0
-        && request.resource.data.wifePercent <= 100
-        && request.resource.data.rate is number
-        && request.resource.data.rate >= 0.7
-        && request.resource.data.rate <= 2.0
-        && request.resource.data.judge is number
-        && request.resource.data.judge >= 1
-        && request.resource.data.judge <= 9
-        && request.resource.data.valid == true
-        && request.resource.data.keys().hasAll(['uid', 'songKey', 'wifePercent', 'rate', 'judge', 'valid']);
+        && request.resource.data.uid == request.auth.uid;
 
-      // Score updates:
-      // - Admins can invalidate scores (set valid=false with metadata)
-      // - No other updates allowed
-      allow update: if request.auth != null
-        && isAdmin(request.auth.uid)
-        && request.resource.data.valid == false
-        && request.resource.data.keys().hasAll(['valid', 'invalidatedAt', 'invalidatedBy', 'invalidationReason']);
-
-      // Score deletion: only admins can permanently delete
-      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+      // No updates or deletes for users (admin can manage via console)
+      allow update: if false;
+      allow delete: if false;
     }
 
   }

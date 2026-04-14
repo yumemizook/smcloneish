@@ -158,3 +158,8 @@ function calculateSSRApprox(msd, wifePercent, playbackRate) {
 
   return result;
 }
+
+// Export to global scope for game.js
+if (typeof window !== 'undefined') {
+  window.calculateSSRApprox = calculateSSRApprox;
+}

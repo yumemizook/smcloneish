@@ -4564,22 +4564,12 @@ function drawNote(note, y, rotation, currentTime) {
             // Phase based on time + y position (to create wave)
             drawX += Math.cos(time * 3 + y * 0.01) * (gameConfig.columnWidth * 0.5);
         } else if (eff === 'dizzy') {
-            // Rotation?
-            // "Dizzy" usually spins the arrows.
-            // Note: `rotation` arg is already 0, 90, 180, 270.
-            // We'll add to it.
-            // rotation += time * 100; // Spin
-            // But we can't easily modify rotation var without affecting logic below (ctx.rotate).
-            // We'll add a `extraRotation` var.
+
             rotation += (time * 100) % 360;
         } else if (eff === 'mini') {
-            // Handled via scale in draw?
-            // We'll scale context later.
+
         } else if (eff === 'flip') {
-            // Invert columns visually? 
-            // Logic: 0->3, 1->2...
-            // But drawX is already calc'd.
-            // X = (3 - col) * width
+
             drawX = (3 - note.col) * gameConfig.columnWidth;
         } else if (eff === 'invert') {
             // 0->1, 1->0, 2->3, 3->2
@@ -6201,7 +6191,8 @@ function initGame(chartInfo, audioBuf, meta, diffStats, audioUrl) {
         replayLog: window.replayData || [],
         replayIndex: 0,
         lastFrameTime: performance.now(),
-        fpsTimer: 0
+        fpsTimer: 0,
+        scoreSaved: false // Prevent duplicate score saves
     };
     window.isAutoplayLaunch = false; // Reset flag
     window.isReplayLaunch = false;
@@ -7187,6 +7178,8 @@ let lastDetailedHits = [];
 
 function saveScore(forceFail = false) {
     if (gameState.isAutoplay) return;
+    if (gameState.scoreSaved) return; // Prevent duplicate saves
+    gameState.scoreSaved = true; // Mark as saved
 
     const song = songLibrary[selectedSongIndex];
     if (!song) return;
@@ -7299,6 +7292,32 @@ function saveScore(forceFail = false) {
 
     // Store hits for Results Screen re-judging
     lastDetailedHits = [...gameState.detailedHits];
+
+    // 6. Submit to Online Firestore if logged in
+    if (window.onlineUser && window.firebaseFirestore?.submitScore) {
+        const song = songLibrary[selectedSongIndex];
+        const chart = song.charts[selectedChartIndex];
+        window.firebaseFirestore.submitScore(window.onlineUser.uid, {
+            songHash: `${song.meta.title}_${chart.difficulty}`.replace(/[^a-zA-Z0-9]/g, '_'),
+            songTitle: song.meta.title,
+            songArtist: song.meta.artist,
+            difficulty: chart.difficulty,
+            meter: parseInt(chart.meter) || 0,
+            wifeScore: accuracyForLB / 100,
+            wifePercent: accuracyForLB,
+            grade: scoreObj.grade,
+            clearType: scoreObj.clearType,
+            maxCombo: gameState.maxCombo,
+            judgments: j4Stats.judgments,
+            rate: rate,
+            ssr: parseFloat(ssr.toFixed(2)),
+            skillsetSSRs: skillsetSSRs
+        }).then(() => {
+            console.log('[Online] Score submitted successfully');
+        }).catch(err => {
+            console.error('[Online] Score submission failed:', err);
+        });
+    }
 }
 
 function recalculateStatsInternal(hits, judgeDiff, baseNoteScore) {
